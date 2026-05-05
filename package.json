@@ -1,0 +1,24 @@
+{
+  "name": "lubin-investment",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "./scripts/ensure-db.sh && pnpm -r --parallel --reporter=append-only run dev",
+    "dev:web": "./scripts/ensure-db.sh && pnpm --filter @lubin/web run dev",
+    "dev:api": "./scripts/ensure-db.sh && pnpm --filter @lubin/api run dev",
+    "dev:fast": "pnpm -r --parallel --reporter=append-only run dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "clean": "lsof -ti:3001,5173 2>/dev/null | xargs -r kill -9 2>/dev/null; ps aux | grep -E 'tsx.*src/server|vite$' | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null; echo '✓ Ports 3001 + 5173 libérés, zombies tués'",
+    "db:up": "./scripts/ensure-db.sh",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f postgres",
+    "db:migrate": "pnpm --filter @lubin/api run db:migrate",
+    "db:studio": "pnpm --filter @lubin/api run db:studio"
+  },
+  "packageManager": "pnpm@11.1.2",
+  "engines": {
+    "node": ">=22"
+  }
+}
