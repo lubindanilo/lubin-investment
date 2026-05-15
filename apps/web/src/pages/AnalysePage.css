@@ -1,0 +1,55 @@
+.error-box {
+  background: var(--red-dim);
+  border: 1px solid var(--brand-border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+
+.error-box-title {
+  font-weight: 600;
+  color: var(--red);
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.error-box-hint {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.5;
+}
+
+.error-box-details {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 4px;
+  word-break: break-word;
+}
+
+.qual-error-banner {
+  background: rgba(180, 83, 9, 0.08);
+  border: 1px solid rgba(180, 83, 9, 0.25);
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+.qual-error-title {
+  font-weight: 600;
+  color: var(--orange);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.qual-error-msg {
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.qual-error-hint {
+  font-size: 12px;
+  color: var(--text2);
+}

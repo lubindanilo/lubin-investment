@@ -1,0 +1,83 @@
+.valo-panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px;
+  margin-top: 14px;
+}
+
+.valo-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 14px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.valo-title {
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--brand);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.valo-fixed {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--text3);
+}
+.valo-fixed-val { color: var(--brand); }
+
+.valo-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+}
+.valo-stat-label { color: var(--text3); }
+.valo-stat-val { color: var(--text); font-size: 14px; margin-top: 2px; font-weight: 500; }
+.valo-stat-val.brand { color: var(--brand); }
+.valo-stat-val.green { color: var(--green); }
+.valo-stat-val.red { color: var(--red); }
+
+.valo-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.valo-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.valo-field label {
+  font-size: 11px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: 'IBM Plex Mono', monospace;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.valo-field input {
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text);
+  font-family: 'IBM Plex Mono', monospace;
+  outline: none;
+  transition: all 0.15s;
+}
+.valo-field input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-dim); }
+
+.valo-recompute { width: 100%; }

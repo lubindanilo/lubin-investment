@@ -1,0 +1,102 @@
+.criteria-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.critere-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.critere-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 3px;
+}
+.critere-card.pass::before { background: var(--green); }
+.critere-card.fail::before { background: var(--red); }
+.critere-card.warn::before { background: var(--orange); }
+
+.critere-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.critere-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: 'IBM Plex Mono', monospace;
+  line-height: 1.4;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: 'IBM Plex Mono', monospace;
+  white-space: nowrap;
+}
+.badge.pass { background: var(--green-dim); color: var(--green); }
+.badge.fail { background: var(--red-dim); color: var(--red); }
+.badge.warn { background: rgba(180, 83, 9, 0.1); color: var(--orange); }
+
+.critere-value {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  margin-bottom: 2px;
+}
+.critere-target {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: 'IBM Plex Mono', monospace;
+}
+.critere-explain {
+  font-size: 12px;
+  color: var(--text2);
+  margin-top: 8px;
+  line-height: 1.5;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.critere-card.clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+.critere-card.clickable:hover {
+  border-color: var(--brand-border);
+  box-shadow: 0 2px 8px rgba(207, 30, 44, 0.08);
+}
+.critere-card.clickable:active {
+  transform: translateY(1px);
+}
+
+.critere-hist-hint {
+  font-size: 10px;
+  color: var(--brand);
+  font-family: 'IBM Plex Mono', monospace;
+  margin-top: 6px;
+  opacity: 0.6;
+}
+.critere-card.clickable:hover .critere-hist-hint { opacity: 1; }
