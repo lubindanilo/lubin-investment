@@ -11,7 +11,7 @@
 import { finnhubLimiter } from '../lib/limiter.js';
 import { fetchWithRetry } from '../lib/retry.js';
 import type { TimeseriesPoint } from '@lubin/shared';
-import { fetchSplitEvents, cumulativeSplitFactor } from './yahooSplits.js';
+import { fetchSplitEvents, splitAdjustWithDiscontinuity } from './yahooSplits.js';
 
 const BASE = 'https://finnhub.io/api/v1';
 const TOKEN = process.env.FINNHUB_API_KEY ?? '';
@@ -241,12 +241,15 @@ export async function getReportedTimeseries(
 }
 
 /**
- * Si la métrique est un share count, on ramène toutes les valeurs en current-basis
- * en multipliant chaque point par le facteur cumulatif des splits qui ont eu lieu
- * APRÈS la date du point. Sinon (revenue, debt, etc.), no-op.
+ * Si la métrique est un share count, on ramène toutes les valeurs en current-basis.
  *
- * Les splits sont fournis par Yahoo /v8/finance/chart (universel, gratuit, indépendant
- * de la source de la timeseries elle-même).
+ * Pour Finnhub on utilise un algorithme "discontinuity-based" (≠ Yahoo date-based) :
+ * Finnhub fait du restatement automatique des filings publiées POST-split — la 10-Q
+ * Q1 publiée juste après un split contient déjà les chiffres post-split, même si le
+ * quarter end est avant. Un adjustment date-based double-counterait le facteur.
+ *
+ * splitAdjustWithDiscontinuity détecte le saut ≈ factor dans la série et n'ajuste que
+ * les points avant ce saut. Voir yahooSplits.ts pour le détail de l'algorithme.
  */
 async function splitAdjustIfNeeded(
   points: TimeseriesPoint[],
@@ -256,10 +259,7 @@ async function splitAdjustIfNeeded(
   if (metric !== 'shares' || points.length === 0) return points;
   const splits = await fetchSplitEvents(ticker);
   if (splits.length === 0) return points;
-  return points.map(p => {
-    const asOfTs = Math.floor(new Date(p.date + 'T00:00:00Z').getTime() / 1000);
-    return { date: p.date, value: p.value * cumulativeSplitFactor(splits, asOfTs) };
-  });
+  return splitAdjustWithDiscontinuity(points, splits);
 }
 
 function extractAndPack(filings: FinnhubFiling[], cfg: MetricConfig): TimeseriesPoint[] {

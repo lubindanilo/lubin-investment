@@ -147,6 +147,79 @@ export function adjustForSplits(rawShares: number, splits: SplitEvent[], asOfTs:
   return rawShares * cumulativeSplitFactor(splits, asOfTs);
 }
 
+/**
+ * Adjustment "discontinuity-based" pour les sources qui restate les filings récents
+ * post-split (Finnhub) mais laissent les anciennes filings as-filed pré-split.
+ *
+ * Problème résolu :
+ *   Finnhub /financials-reported stocke chaque filing avec la valeur déposée à la SEC,
+ *   mais Finnhub auto-restate les filings publiés APRÈS un split (la 10-Q Q1 publiée
+ *   en mai contient les chiffres post-split pour Q1, même si le quarter end est avant
+ *   le split). Conséquence : la série a une "marche d'escalier" entre les anciens
+ *   points pré-restatement et les nouveaux post-restatement.
+ *
+ *   Un adjustment date-based qui multiplie tous les points dont date < split.date
+ *   ferait DOUBLE-COUNT le facteur sur les points déjà restated.
+ *
+ * Algorithme :
+ *   Pour chaque split (du plus ancien au plus récent) :
+ *     1. Cherche la transition dans la série : un saut entre 2 points consécutifs
+ *        dont le ratio matche le split factor (tolérance ±30%).
+ *     2. Si trouvé : multiplie les points avant le saut par le factor.
+ *        Les points après sont laissés tels quels (Finnhub les a déjà restated).
+ *     3. Si non trouvé : fallback date-based — la série n'inclut probablement
+ *        pas la transition (toutes les valeurs sont pré-restatement ou toutes post),
+ *        donc on peut multiplier celles dont quarterEnd < split.date.
+ *
+ * @param points  Série triée par date croissante. PEUT être mutée — on renvoie une nouvelle array.
+ * @param splits  Liste des splits triés croissants par ts.
+ */
+export function splitAdjustWithDiscontinuity(
+  points: { date: string; value: number }[],
+  splits: SplitEvent[],
+): { date: string; value: number }[] {
+  if (splits.length === 0 || points.length < 1) return points;
+  const sorted = [...points].sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const split of splits) {
+    const factor = split.numerator / split.denominator;
+    // Tolérance ±30% — un quarter-over-quarter normal varie de quelques %, donc une
+    // valeur entre 0.7×factor et 1.3×factor est très probablement le split.
+    const tol = 0.3;
+
+    // Cherche l'index où le ratio match (= entre i et i+1, la valeur est multipliée
+    // par ~factor, donc on multiplie tous les points 0..i par factor pour homogénéiser).
+    let transitionIdx = -1;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i]!.value;
+      const b = sorted[i + 1]!.value;
+      if (a <= 0) continue;
+      const ratio = b / a;
+      if (Math.abs(ratio - factor) / factor < tol) {
+        transitionIdx = i;
+        break;
+      }
+    }
+
+    if (transitionIdx >= 0) {
+      for (let j = 0; j <= transitionIdx; j++) {
+        sorted[j] = { date: sorted[j]!.date, value: sorted[j]!.value * factor };
+      }
+    } else {
+      // Pas de transition dans la série → fallback date-based : si tout est < split.ts,
+      // on multiplie tout ; si tout est > split.ts, on ne touche à rien.
+      for (let j = 0; j < sorted.length; j++) {
+        const ts = Math.floor(new Date(sorted[j]!.date + 'T00:00:00Z').getTime() / 1000);
+        if (ts < split.ts) {
+          sorted[j] = { date: sorted[j]!.date, value: sorted[j]!.value * factor };
+        }
+      }
+    }
+  }
+
+  return sorted;
+}
+
 /** Helper pour les tests : permet de vider le cache entre cas. */
 export function _resetSplitsCache(): void {
   splitsCache.clear();
