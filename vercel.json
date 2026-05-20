@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "pnpm install --frozen-lockfile --config.confirmModulesPurge=false",
+  "buildCommand": "pnpm build:vercel",
+  "outputDirectory": "apps/web/dist",
+  "framework": null,
+  "functions": {
+    "api/[...all].ts": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
+  "rewrites": [
+    { "source": "/health", "destination": "/api/[...all]" },
+    { "source": "/api/(.*)", "destination": "/api/[...all]" }
+  ]
+}

@@ -26,8 +26,17 @@ import { errorHandler } from './middleware/error.js';
 const app: Express = express();
 const PORT = Number(process.env.API_PORT ?? 3001);
 
-// CORS : autorise le front Vite (5173 en dev)
-app.use(cors({ origin: process.env.WEB_URL ?? 'http://localhost:5173' }));
+// CORS :
+//   - dev local : Vite tourne sur 5173, l'API sur 3001 → origin distinct, on autorise explicitement
+//   - Vercel prod : web + api servis sur le même domaine → same-origin, CORS n'a rien à faire.
+//     On autorise quand même WEB_URL si défini (utile pour PR preview qui pointe vers prod).
+//   - Vercel preview : VERCEL_URL = le domaine de la preview courante
+const allowedOrigins = [
+  process.env.WEB_URL ?? 'http://localhost:5173',
+  process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
+  process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null,
+].filter((o): o is string => !!o);
+app.use(cors({ origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins }));
 app.use(express.json({ limit: '1mb' }));
 
 // Logging minimal
@@ -67,8 +76,12 @@ app.use((req, res) => {
 // Error handler central — capture vers Sentry si init
 app.use(errorHandler);
 
-// On ne démarre le listener que hors tests (Vitest met NODE_ENV='test')
-if (process.env.NODE_ENV !== 'test') {
+// On ne démarre le listener QUE si on tourne en standalone (dev local, Docker, VPS…).
+// Conditions de skip :
+//   - NODE_ENV=test    → Vitest charge l'app sans bind de port
+//   - VERCEL=1         → runtime serverless : Vercel route lui-même les requêtes vers l'export
+const isStandalone = process.env.NODE_ENV !== 'test' && !process.env.VERCEL;
+if (isStandalone) {
   const server = app.listen(PORT, () => {
     console.log(`✓ Lubin Investment API → http://localhost:${PORT}`);
     console.log(`  Health → http://localhost:${PORT}/health`);
@@ -86,3 +99,4 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 export { app };
+export default app;

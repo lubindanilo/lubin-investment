@@ -1,0 +1,25 @@
+# Local-only infra
+docker-compose.yml
+scripts/
+cron/
+
+# Tests + fixtures (jamais exécutés en prod Vercel)
+**/test/
+**/*.test.ts
+**/*.spec.ts
+**/vitest.config.*
+
+# Build output (Vercel régénère)
+**/dist/
+**/.turbo/
+**/.next/
+
+# IDE + OS
+.vscode/
+.idea/
+.DS_Store
+
+# Secrets — déjà dans .gitignore mais double-ceinture
+.env
+.env.local
+.env.*.local

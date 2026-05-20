@@ -2,7 +2,11 @@
 // docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // native       → macOS local dev (Darwin arm64/x64)
+  // rhel-openssl-3.0.x → Vercel serverless runtime (Amazon Linux 2023, OpenSSL 3)
+  // Sans ce target, Prisma plante au cold start : "Could not load engine"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
