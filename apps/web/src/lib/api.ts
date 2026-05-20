@@ -9,6 +9,7 @@ import type {
   ValuationResult,
   DerivedMetrics,
   TimeseriesResponse,
+  PfcfHistoryResponse,
   PublicUser,
 } from '@lubin/shared';
 import { captureException } from './sentry.js';
@@ -109,6 +110,10 @@ export const api = {
   timeseries(ticker: string, metric: string, years: number, freq: 'quarterly' | 'annual' = 'quarterly') {
     const q = new URLSearchParams({ ticker, metric, freq, years: String(years) });
     return safeRequest<TimeseriesResponse>(`/api/timeseries?${q}`);
+  },
+  pfcfHistory(ticker: string, years: number) {
+    const q = new URLSearchParams({ ticker, years: String(years) });
+    return safeRequest<PfcfHistoryResponse>(`/api/pfcf-history?${q}`);
   },
   watchlist: {
     list: () => safeRequest<WatchlistEntry[]>('/api/watchlist'),

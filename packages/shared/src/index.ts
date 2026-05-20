@@ -187,6 +187,15 @@ export interface CriterionHistogram {
   unit: 'currency' | 'count' | 'percent';
 }
 
+/**
+ * Liste des critères qui ouvrent un graphique LINE (≠ histogramme).
+ * Pour le moment : juste P/FCF actuel, qui montre l'évolution du multiple dans le temps.
+ * À étendre si on ajoute d'autres ratios trackables (PE, PB, EV/EBITDA, etc.).
+ */
+export const CRITERION_LINECHARTS: Record<string, { label: string; kind: 'pfcf' }> = {
+  'P/FCF actuel': { label: 'Évolution du P/FCF dans le temps', kind: 'pfcf' },
+};
+
 export const CRITERION_HISTOGRAMS: Record<string, CriterionHistogram> = {
   'Rentable (marge nette)':            { metricKey: 'netIncome',       label: 'Résultat net trimestriel',         unit: 'currency' },
   'Croissance du CA 5 ans':            { metricKey: 'revenue',         label: 'CA trimestriel',                   unit: 'currency' },
@@ -197,6 +206,24 @@ export const CRITERION_HISTOGRAMS: Record<string, CriterionHistogram> = {
   'Dette nette / FCF':                 { metricKey: 'totalDebt',       label: 'Dette long terme',                 unit: 'currency' },
   'Cash Conversion Rate':              { metricKey: 'fcf',             label: 'Free cash flow trimestriel',       unit: 'currency' },
 };
+
+// ─── P/FCF historique (graphique line cliquable depuis le critère) ────────
+
+export interface PfcfHistoryPoint {
+  /** YYYY-MM-DD */
+  date: string;
+  /** Multiple P/FCF (ex 22.5). Toujours > 0 — points où le ratio est non-pertinent sont omis. */
+  pfcf: number;
+}
+
+export interface PfcfHistoryResponse {
+  ticker: string;
+  years: number;
+  points: PfcfHistoryPoint[];
+  cached: boolean;
+  ageMs?: number;
+  fetchedInMs?: number;
+}
 
 // ─── Auth (user public — pas de password ni hash) ──────────────────────────
 

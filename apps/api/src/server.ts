@@ -21,6 +21,7 @@ import cookieParser from 'cookie-parser';
 import { analyzeRouter } from './routes/analyze.js';
 import { watchlistRouter } from './routes/watchlist.js';
 import { timeseriesRouter } from './routes/timeseries.js';
+import { pfcfHistoryRouter } from './routes/pfcfHistory.js';
 import { authRouter } from './routes/auth.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { errorHandler } from './middleware/error.js';
@@ -77,6 +78,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/analyze', analyzeRouter);
 app.use('/api/watchlist', watchlistRouter);
 app.use('/api/timeseries', timeseriesRouter);
+app.use('/api/pfcf-history', pfcfHistoryRouter);
 
 // 404 fallback (avant l'error handler)
 app.use((req, res) => {
