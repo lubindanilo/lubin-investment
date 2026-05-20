@@ -21,8 +21,9 @@
  *   - Pas de quarter récent connu (delta < 6 mois)
  *   - Pas assez de quarters pour calculer TTM (besoin ≥ 4)
  */
-import { fetchSplitEvents, splitAdjustWithDiscontinuity } from './yahooSplits.js';
+import { fetchSplitEvents, splitAdjustWithDiscontinuity, cumulativeSplitFactor } from './yahooSplits.js';
 import { getReportedTimeseries } from './finnhubFundamentals.js';
+import { resolveYahooTicker } from './yahooResolve.js';
 import { yahooLimiter } from '../lib/limiter.js';
 import type { TimeseriesPoint } from '@lubin/shared';
 
@@ -127,13 +128,26 @@ function findLatestAsOf<T extends { date: string }>(
  * @param years   Profondeur de l'historique (1, 5, 10, 20, 50 pour "All")
  */
 export async function getPfcfHistory(ticker: string, years: number): Promise<PfcfHistoryPoint[]> {
+  // ─── Décide la source selon US/EU ────────────────────────────────────
+  // EU ticker (NESN.SW, COPN.SW…) : Yahoo n'a QUE l'annuel → on calcule un P/FCF
+  // par année (4 points max). US ticker : Finnhub quarterly + TTM rolling (60+ pts).
+  const resolved = await resolveYahooTicker(ticker).catch(() => null);
+  const isEuTicker = !!resolved && resolved.symbol !== ticker;
+
+  if (isEuTicker && resolved) {
+    return getPfcfHistoryEu(resolved.symbol, years);
+  }
+  return getPfcfHistoryUs(ticker, years);
+}
+
+/** Path US : Finnhub quarterly + TTM rolling, ~60-240 points selon l'interval. */
+async function getPfcfHistoryUs(ticker: string, years: number): Promise<PfcfHistoryPoint[]> {
   // Choix de résolution : 1Y = weekly (52 pts), au-delà = monthly (60-600 pts)
   const interval: '1d' | '1wk' | '1mo' = years <= 1 ? '1wk' : '1mo';
 
   // Fenêtre FCF : besoin de 1 an supplémentaire pour calculer le TTM du premier point
   const fcfYears = years + 1;
 
-  // Fetch en parallèle : prix, FCF quarterly, shares quarterly, splits
   const [prices, fcfQ, sharesQ, splits] = await Promise.all([
     fetchPriceHistory(ticker, years, interval),
     getReportedTimeseries(ticker, 'fcf', 'quarterly', fcfYears),
@@ -150,14 +164,9 @@ export async function getPfcfHistory(ticker: string, years: number): Promise<Pfc
     return [];
   }
 
-  // getReportedTimeseries(metric='shares') applique déjà splitAdjustWithDiscontinuity en interne.
-  // On ré-applique malgré tout pour les FCF ? Non — FCF est un montant total, indépendant des splits.
-  // Pour shares on bénéficie déjà de la détection discontinuité.
-  void splits; // (gardé pour future extension éventuelle, ex: ajustement dividendes)
-
+  void splits;
   const ttmSeries = rollingTtm(fcfQ);
 
-  // Pour chaque prix, on retrouve le quarter TTM et shares correspondants
   const points: PfcfHistoryPoint[] = [];
   for (const p of prices) {
     const ttm = findLatestAsOf(ttmSeries, p.date);
@@ -170,6 +179,86 @@ export async function getPfcfHistory(ticker: string, years: number): Promise<Pfc
     points.push({ date: p.date, pfcf: Math.round(pfcf * 100) / 100 });
   }
 
-  console.log(`[pfcf ${ticker}] ${points.length} pts (${interval}) — prices=${prices.length} fcfQ=${fcfQ.length} sharesQ=${sharesQ.length}`);
+  console.log(`[pfcf ${ticker}] US ${points.length} pts (${interval}) — prices=${prices.length} fcfQ=${fcfQ.length} sharesQ=${sharesQ.length}`);
   return points;
+}
+
+/**
+ * Path EU : Yahoo annual seulement. On calcule un P/FCF par fin d'année fiscale :
+ *   pfcf(année N) = price(fin année N) × shares(année N, split-adj) / FCF(année N)
+ * Renvoie au max ~4 points (Yahoo plafonne à 4 ans pour les EU). C'est moins riche
+ * que le quarterly mais ça donne quand même la tendance long terme du multiple.
+ */
+async function getPfcfHistoryEu(yahooSymbol: string, years: number): Promise<PfcfHistoryPoint[]> {
+  // Fetch direct des séries annuelles + splits via le helper bas-niveau
+  const [annualFcf, annualShares, prices, splits] = await Promise.all([
+    fetchYahooAnnualBasic(yahooSymbol, 'annualFreeCashFlow'),
+    fetchYahooAnnualBasic(yahooSymbol, 'annualDilutedAverageShares'),
+    fetchPriceHistory(yahooSymbol, Math.max(years, 5), '1mo'),
+    fetchSplitEvents(yahooSymbol),
+  ]);
+  if (annualFcf.length === 0 || annualShares.length === 0 || prices.length === 0) {
+    console.warn(`[pfcf ${yahooSymbol}] EU pas assez de données (fcf=${annualFcf.length}, shares=${annualShares.length}, prices=${prices.length})`);
+    return [];
+  }
+
+  // Split-adjust les shares (Yahoo as-filed → current-basis)
+  const sharesAdjusted = annualShares.map(s => {
+    const ts = Math.floor(new Date(s.date + 'T00:00:00Z').getTime() / 1000);
+    return { date: s.date, value: s.value * cumulativeSplitFactor(splits, ts) };
+  });
+
+  // Index par année
+  const fcfByYear: Record<string, number> = {};
+  const sharesByYear: Record<string, number> = {};
+  for (const p of annualFcf) fcfByYear[p.date.slice(0, 4)] = p.value;
+  for (const p of sharesAdjusted) sharesByYear[p.date.slice(0, 4)] = p.value;
+
+  // Pour chaque année où on a (FCF, shares), on trouve le prix de fin d'année correspondant
+  const points: PfcfHistoryPoint[] = [];
+  const annualDates = annualFcf.map(p => p.date).sort();
+  for (const yearEnd of annualDates) {
+    const yr = yearEnd.slice(0, 4);
+    const fcf = fcfByYear[yr];
+    const sh = sharesByYear[yr];
+    if (fcf == null || fcf <= 0 || sh == null || sh <= 0) continue;
+    // Le prix de la fin d'année : on cherche le price le plus proche (≤) de yearEnd
+    let priceAt: number | null = null;
+    for (const p of prices) {
+      if (p.date <= yearEnd) priceAt = p.value;
+      else break;
+    }
+    if (priceAt == null) continue;
+    const marketCap = priceAt * sh;
+    const pfcf = marketCap / fcf;
+    if (!Number.isFinite(pfcf) || pfcf <= 0) continue;
+    points.push({ date: yearEnd, pfcf: Math.round(pfcf * 100) / 100 });
+  }
+
+  console.log(`[pfcf ${yahooSymbol}] EU ${points.length} pts annual — fcf=${annualFcf.length} shares=${annualShares.length} splits=${splits.length}`);
+  return points;
+}
+
+/** Helper bas-niveau pour récupérer un type annuel Yahoo (sans crumb). */
+async function fetchYahooAnnualBasic(symbol: string, type: string): Promise<Array<{ date: string; value: number }>> {
+  return yahooLimiter.schedule(async () => {
+    const BASE = 'https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries';
+    const now = Math.floor(Date.now() / 1000);
+    const url = `${BASE}/${encodeURIComponent(symbol)}?symbol=${encodeURIComponent(symbol)}&type=${encodeURIComponent(type)}&period1=${now - 10 * 365 * 86400}&period2=${now}`;
+    try {
+      const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' } });
+      if (!res.ok) return [];
+      const data = await res.json() as { timeseries?: { result?: Array<Record<string, unknown> & { meta?: { type?: string[] } }> } };
+      const result = data.timeseries?.result?.find(r => r.meta?.type?.includes(type));
+      const rows = (result?.[type] as Array<{ asOfDate?: string; reportedValue?: { raw?: number } }> | undefined) ?? [];
+      return rows
+        .map(r => (r.asOfDate && typeof r.reportedValue?.raw === 'number')
+          ? { date: r.asOfDate, value: r.reportedValue.raw }
+          : null)
+        .filter((x): x is { date: string; value: number } => x !== null)
+        .sort((a, b) => a.date.localeCompare(b.date));
+    } catch {
+      return [];
+    }
+  });
 }

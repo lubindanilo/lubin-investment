@@ -179,6 +179,12 @@ export interface TimeseriesResponse {
   freq: 'quarterly' | 'annual';
   years: number;
   points: TimeseriesPoint[];
+  /**
+   * true si le ticker est non-US et que la donnée vient de Yahoo annual.
+   * Yahoo /fundamentals-timeseries n'expose PAS le quarterly pour les bourses européennes
+   * (juste 4 années annuelles). Le front affiche un petit notice pour expliquer.
+   */
+  euAnnualOnly?: boolean;
 }
 
 /** Période disponible dans le sélecteur UI */

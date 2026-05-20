@@ -21,23 +21,34 @@ export function HistogramModal({ ticker, criterionName, config, onClose }: Props
   const [data, setData] = useState<TimeseriesPoint[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [euAnnualOnly, setEuAnnualOnly] = useState(false);
+  const [actualFreq, setActualFreq] = useState<'quarterly' | 'annual'>('quarterly');
 
-  // Pour 1Y et 5Y → quarterly (granularité fine). Au-delà → annual (Finnhub a 16+ années annuelles).
-  const freq: 'quarterly' | 'annual' = (period === '1Y' || period === '5Y') ? 'quarterly' : 'annual';
+  // Demandé : 1Y et 5Y → quarterly. Le backend peut override en annual pour les tickers EU.
+  const requestedFreq: 'quarterly' | 'annual' = (period === '1Y' || period === '5Y') ? 'quarterly' : 'annual';
 
   // Charge la série au changement de période
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.timeseries(ticker, config.metricKey, PERIOD_YEARS[period], freq)
-      .then(res => { if (!cancelled) setData(res.points); })
+    api.timeseries(ticker, config.metricKey, PERIOD_YEARS[period], requestedFreq)
+      .then(res => {
+        if (cancelled) return;
+        setData(res.points);
+        setEuAnnualOnly(res.euAnnualOnly ?? false);
+        setActualFreq(res.freq);
+      })
       .catch(e => {
         if (!cancelled) setError(e instanceof ApiError ? e.userMessage : (e as Error).message);
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [ticker, config.metricKey, period, freq]);
+  }, [ticker, config.metricKey, period, requestedFreq]);
+
+  // Utilise toujours actualFreq (ce que le backend a effectivement servi) pour
+  // formater les ticks/tooltips correctement.
+  const freq = actualFreq;
 
   // Échap pour fermer
   useEffect(() => {
@@ -125,7 +136,13 @@ export function HistogramModal({ ticker, criterionName, config, onClose }: Props
           <div className="hist-error">Aucune donnée trimestrielle disponible pour cette période.</div>
         )}
 
-        {!loading && !error && data && data.length > 0 && gaps.length > 0 && (
+        {!loading && !error && data && data.length > 0 && euAnnualOnly && (
+          <div className="hist-gap-warning">
+            <strong>ℹ Données annuelles uniquement</strong> : Yahoo Finance ne fournit que 4 années annuelles pour les bourses européennes (et pas les trimestres). C'est la meilleure profondeur disponible sans abonnement payant.
+          </div>
+        )}
+
+        {!loading && !error && data && data.length > 0 && gaps.length > 0 && !euAnnualOnly && (
           <div className="hist-gap-warning">
             <strong>⚠ Donnée incomplète</strong> : il manque environ {gaps.reduce((s, g) => s + g.missingApprox, 0)} {freq === 'quarterly' ? 'trimestre(s)' : 'année(s)'} entre{' '}
             {gaps.map((g, i) => (
