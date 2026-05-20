@@ -198,6 +198,15 @@ export const CRITERION_HISTOGRAMS: Record<string, CriterionHistogram> = {
   'Cash Conversion Rate':              { metricKey: 'fcf',             label: 'Free cash flow trimestriel',       unit: 'currency' },
 };
 
+// ─── Auth (user public — pas de password ni hash) ──────────────────────────
+
+export interface PublicUser {
+  id: string;
+  email: string;
+  /** ISO 8601 */
+  createdAt: string;
+}
+
 // ─── Erreurs API normalisées ───────────────────────────────────────────────
 
 export interface ApiError {

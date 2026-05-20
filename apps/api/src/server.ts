@@ -17,9 +17,11 @@ initSentry();
 
 import express, { type Express } from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { analyzeRouter } from './routes/analyze.js';
 import { watchlistRouter } from './routes/watchlist.js';
 import { timeseriesRouter } from './routes/timeseries.js';
+import { authRouter } from './routes/auth.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { errorHandler } from './middleware/error.js';
 
@@ -36,8 +38,14 @@ const allowedOrigins = [
   process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
   process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null,
 ].filter((o): o is string => !!o);
-app.use(cors({ origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins }));
+// credentials:true → autorise le navigateur à envoyer le cookie auth en cross-origin (dev local).
+// En prod Vercel (same-origin), c'est neutre — le cookie passerait de toute façon.
+app.use(cors({
+  origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
+  credentials: true,
+}));
 app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
 
 // Logging minimal
 app.use((req, _res, next) => {
@@ -57,6 +65,7 @@ app.get('/health', (_req, res) => {
       finnhub: !!process.env.FINNHUB_API_KEY,
       fmp: !!process.env.FMP_API_KEY,
       db: !!process.env.DATABASE_URL,
+      auth: !!process.env.AUTH_SECRET,
       sentry: !!process.env.SENTRY_DSN,
     },
   });
@@ -64,6 +73,7 @@ app.get('/health', (_req, res) => {
 
 // Rate limit appliqué uniquement aux routes /api/*
 app.use('/api', apiLimiter);
+app.use('/api/auth', authRouter);
 app.use('/api/analyze', analyzeRouter);
 app.use('/api/watchlist', watchlistRouter);
 app.use('/api/timeseries', timeseriesRouter);

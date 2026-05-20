@@ -31,3 +31,4 @@ apps/api/prisma/migrations/.tmp/
 # Docker volumes
 postgres-data/
 .env.bak
+.vercel

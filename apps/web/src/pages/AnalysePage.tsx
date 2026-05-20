@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { AnalyzeResponse, ValoParams, ValuationResult } from '@lubin/shared';
 import { api, ApiError } from '../lib/api.js';
 import { useToast } from '../components/Toast.js';
+import { useAuth } from '../contexts/AuthContext.js';
 import { ScoreCard } from '../components/ScoreCard.js';
 import { CriteriaGrid } from '../components/CriterionCard.js';
 import { SectionHeader } from '../components/SectionHeader.js';
@@ -21,6 +22,8 @@ function scoreOf(items: { statut: 'pass' | 'fail' | 'warn' }[]) {
 export function AnalysePage() {
   const { ticker: routeTicker } = useParams<{ ticker?: string }>();
   const toast = useToast();
+  const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [ticker, setTicker] = useState(routeTicker?.toUpperCase() ?? '');
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
@@ -30,9 +33,12 @@ export function AnalysePage() {
   const [inWatchlist, setInWatchlist] = useState<Set<string>>(new Set());
   const [lastTicker, setLastTicker] = useState<string>('');
 
+  // Charge la watchlist uniquement si l'utilisateur est connecté. Sinon, ne rien afficher
+  // (l'analyse en elle-même reste publique — c'est juste le bouton "Ajouter" qui change).
   useEffect(() => {
+    if (!user) { setInWatchlist(new Set()); return; }
     api.watchlist.list().then(items => setInWatchlist(new Set(items.map(e => e.ticker)))).catch(() => {});
-  }, []);
+  }, [user]);
 
   const run = useCallback(async (t: string) => {
     if (!t.trim()) return;
@@ -61,6 +67,12 @@ export function AnalysePage() {
 
   async function addToWatchlist() {
     if (!analysis) return;
+    // Pas connecté → on envoie vers /login en mémorisant la page courante
+    if (!user) {
+      navigate('/login', { state: { from: `/analyse/${analysis.ticker}` } });
+      toast.push('warn', 'Connecte-toi pour gérer ta watchlist');
+      return;
+    }
     try {
       await api.watchlist.add(analysis.ticker);
       setInWatchlist(prev => new Set(prev).add(analysis.ticker));

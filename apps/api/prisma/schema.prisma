@@ -14,7 +14,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// Cache qualitatif par ticker (TTL géré côté code)
+/// Utilisateur — auth email/password locale (pas de social pour le moment).
+/// Le passwordHash est un bcrypt cost 12. L'email est normalisé en lowercase à l'insert.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  watchlist WatchlistEntry[]
+}
+
+/// Cache qualitatif par ticker — PARTAGÉ entre tous les utilisateurs.
+/// L'analyse GPT d'un business ne dépend pas de l'utilisateur qui demande, donc on dédup'.
 model QualitativeCache {
   ticker    String   @id
   /// JSON contenant { business: Criterion[], management: Criterion[], verdict_direct: string }
@@ -22,15 +34,20 @@ model QualitativeCache {
   updatedAt DateTime @default(now()) @updatedAt
 }
 
-/// Watchlist globale (Phase 1 sans auth — Phase 3 ajoutera userId)
+/// Watchlist par utilisateur. Un même ticker peut apparaître chez plusieurs users (différentes lignes).
 model WatchlistEntry {
   id        Int      @id @default(autoincrement())
-  ticker    String   @unique
+  userId    String
+  ticker    String
   addedAt   DateTime @default(now())
   /// Snapshot du dernier refresh (P/FCF, score chiffres, etc.) — nullable au premier ajout
   snapshot  Json?
   /// Date du dernier rafraîchissement
   refreshedAt DateTime?
 
-  @@index([ticker])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Un user ne peut pas avoir le même ticker deux fois
+  @@unique([userId, ticker])
+  @@index([userId])
 }

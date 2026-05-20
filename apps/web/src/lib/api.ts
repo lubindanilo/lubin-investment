@@ -9,6 +9,7 @@ import type {
   ValuationResult,
   DerivedMetrics,
   TimeseriesResponse,
+  PublicUser,
 } from '@lubin/shared';
 import { captureException } from './sentry.js';
 
@@ -44,6 +45,9 @@ async function request<T>(path: string, init: RequestInit = {}, opts: RequestOpt
       const res = await fetch(path, {
         ...init,
         signal,
+        // credentials:'include' → envoie le cookie auth avec chaque requête.
+        // Sans ça, le cookie HttpOnly serait bloqué côté navigateur en cross-origin (dev local).
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
       });
       if (!res.ok) {
@@ -75,12 +79,13 @@ async function request<T>(path: string, init: RequestInit = {}, opts: RequestOpt
   throw new ApiError(0, 'Échec inattendu de la requête');
 }
 
-// Wrapper qui capture vers Sentry les erreurs imprévues
+// Wrapper qui capture vers Sentry les erreurs imprévues.
+// 400 (validation) et 401 (non-auth, simplement "pas connecté") sont des comportements normaux → pas de Sentry.
 async function safeRequest<T>(path: string, init: RequestInit = {}, opts?: RequestOpts): Promise<T> {
   try {
     return await request<T>(path, init, opts);
   } catch (e) {
-    if (e instanceof ApiError && e.status !== 400) captureException(e, { path });
+    if (e instanceof ApiError && e.status !== 400 && e.status !== 401) captureException(e, { path });
     throw e;
   }
 }
@@ -116,5 +121,27 @@ export const api = {
       safeRequest<WatchlistEntry[]>(`/api/watchlist/refresh${force ? '?force=true' : ''}`, { method: 'POST' }),
     remove: (ticker: string) =>
       safeRequest<{ ok: true }>(`/api/watchlist/${encodeURIComponent(ticker)}`, { method: 'DELETE' }),
+  },
+  auth: {
+    /** GET /api/auth/me — renvoie le user ou null si pas connecté (au lieu de throw sur 401). */
+    me: async (): Promise<PublicUser | null> => {
+      try {
+        return await safeRequest<PublicUser>('/api/auth/me');
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) return null;
+        throw e;
+      }
+    },
+    signup: (email: string, password: string) =>
+      safeRequest<PublicUser>('/api/auth/signup', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      }),
+    login: (email: string, password: string) =>
+      safeRequest<PublicUser>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      }),
+    logout: () => safeRequest<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
   },
 };
