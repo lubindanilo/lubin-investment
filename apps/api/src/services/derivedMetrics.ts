@@ -11,6 +11,13 @@ export function computeDerivedMetrics(input: {
   quote: FinnhubQuote | null;
   /** CAGR du nombre d'actions calculé depuis Yahoo (source brute). Null si indisponible. */
   yahooShareCagr?: number | null;
+  /**
+   * CAGR du FCF/action calculé directement depuis Yahoo (FCF total / shares split-adj).
+   * Préféré à epsGrowth5Y Finnhub car (1) FCF est plus pertinent qu'EPS, (2) Finnhub peut
+   * tarder à split-adjuster sur les tickers ayant splitté récemment. Null si Yahoo n'a pas
+   * suffisamment d'historique FCF pour ce ticker.
+   */
+  yahooFcfPerShareCagr?: number | null;
 }): DerivedMetrics {
   const m = input.metric?.metric ?? {};
   const price = input.quote?.c ?? null;
@@ -26,9 +33,17 @@ export function computeDerivedMetrics(input: {
   const revenueShareGrowth5Y = pct('revenueShareGrowth5Y');
   const epsGrowth5Y = pct('epsGrowth5Y');
 
-  // FCF/share growth (proxy via EPS si pas mieux)
+  // FCF/share growth — priorité :
+  //   1. Yahoo direct (FCF total / shares split-adj) — la métrique exacte qu'on veut
+  //   2. Finnhub epsGrowth5Y — fallback (proxy EPS = FCF/share, ok à la louche sauf
+  //      après un split récent où Finnhub peut afficher un growth aberrant le temps
+  //      qu'il re-traite ses ratios)
   let fcfPerShareCagr: number | null = null;
-  if (epsGrowth5Y != null) fcfPerShareCagr = epsGrowth5Y;
+  if (input.yahooFcfPerShareCagr != null && Number.isFinite(input.yahooFcfPerShareCagr)) {
+    fcfPerShareCagr = input.yahooFcfPerShareCagr;
+  } else if (epsGrowth5Y != null) {
+    fcfPerShareCagr = epsGrowth5Y;
+  }
 
   // Évolution nombre d'actions :
   //   1) Source brute Yahoo (priorité) — vrai CAGR depuis la série diluted shares

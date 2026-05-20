@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { AnalyzeResponse, ValoParams } from '@lubin/shared';
 import { getMetric, getProfile2, getQuote, getCompanyNews } from '../services/finnhub.js';
 import { getProfile } from '../services/fmp.js';
-import { getSharesHistory, computeSharesCagr } from '../services/yahoo.js';
+import { getSharesHistory, computeSharesCagr, computeFcfPerShareCagr } from '../services/yahoo.js';
 import { getEarningsInfo } from '../services/earnings.js';
 import { fetchQualitative, type QualitativeResult } from '../services/openai.js';
 import { computeDerivedMetrics, buildQuantitativeCriteria, buildValuation, filterNews } from '../services/derivedMetrics.js';
@@ -104,7 +104,8 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   }
 
   const yahooShareCagr = computeSharesCagr(sharesHistory);
-  const metrics = computeDerivedMetrics({ metric, profile: fhProfile, quote, yahooShareCagr });
+  const yahooFcfPerShareCagr = computeFcfPerShareCagr(sharesHistory);
+  const metrics = computeDerivedMetrics({ metric, profile: fhProfile, quote, yahooShareCagr, yahooFcfPerShareCagr });
   const company = fhProfile?.name ?? fmpProfile?.companyName ?? ticker;
   const quant = buildQuantitativeCriteria(metrics);
 
@@ -188,7 +189,8 @@ analyzeRouter.post('/refresh-qual', analyzeLimiter, asyncHandler(async (req: Req
     getSharesHistory(ticker).catch(() => null),
   ]);
   const yahooShareCagr = computeSharesCagr(sharesHistory);
-  const metrics = computeDerivedMetrics({ metric, profile, quote, yahooShareCagr });
+  const yahooFcfPerShareCagr = computeFcfPerShareCagr(sharesHistory);
+  const metrics = computeDerivedMetrics({ metric, profile, quote, yahooShareCagr, yahooFcfPerShareCagr });
   const company = profile?.name ?? ticker;
   const quant = buildQuantitativeCriteria(metrics);
   const chiffresContext = quant.map(c => ({ nom: c.nom, valeur: c.valeur, statut: c.statut }));

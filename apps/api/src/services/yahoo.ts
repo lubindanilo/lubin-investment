@@ -14,6 +14,7 @@
  * sur la dérivation Finnhub (revenueGrowth5Y vs revenueShareGrowth5Y).
  */
 import { yahooLimiter } from '../lib/limiter.js';
+import { fetchSplitEvents, cumulativeSplitFactor } from './yahooSplits.js';
 
 const TIMESERIES_BASE = 'https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries';
 const CRUMB_URL = 'https://query1.finance.yahoo.com/v1/test/getcrumb';
@@ -101,10 +102,10 @@ async function fetchTimeseries(ticker: string, types: string[]): Promise<Timeser
 }
 
 /** Pour la dérivation CAGR annuelle (ne garde que l'année + valeurs strictement > 0). */
-function extractSeries(response: TimeseriesResponse, type: string): { fiscalYear: number; value: number }[] {
+function extractSeries(response: TimeseriesResponse, type: string): { fiscalYear: number; date: string; value: number }[] {
   return extractSeriesFull(response, type)
     .filter(p => p.value > 0)
-    .map(p => ({ fiscalYear: Number(p.date.slice(0, 4)), value: p.value }))
+    .map(p => ({ fiscalYear: Number(p.date.slice(0, 4)), date: p.date, value: p.value }))
     .filter(p => Number.isFinite(p.fiscalYear));
 }
 
@@ -124,8 +125,12 @@ function extractSeriesFull(response: TimeseriesResponse, type: string): { date: 
 
 export interface SharesHistoryPoint {
   fiscalYear: number;
-  /** Préférence : actions diluées moyennes ; fallback : ordinary shares de fin d'année */
+  /** Préférence : actions diluées moyennes ; fallback : ordinary shares de fin d'année.
+   *  Toujours en current-basis (split-adjusté) — peut être comparé d'une année à l'autre. */
   dilutedShares: number;
+  /** Free cash flow annuel total (devise rapport). Null si Yahoo ne l'a pas pour cette année.
+   *  FCF n'est PAS affecté par les splits (c'est un montant total, pas par action). */
+  fcf: number | null;
 }
 
 /**
@@ -133,11 +138,25 @@ export interface SharesHistoryPoint {
  * Préfère `annualDilutedAverageShares` (moyenne pondérée diluée, métrique standard pour EPS) ;
  * fallback sur `annualOrdinarySharesNumber` (snapshot fin d'année).
  * Null si Yahoo plante ou ne renvoie pas assez de points.
+ *
+ * IMPORTANT — split adjustment :
+ *   Yahoo renvoie les share counts as-filed (= avec le nombre d'actions exact à la date
+ *   du reporting, AVANT splits ultérieurs). Pour comparer 2020 à 2025, il faut tout
+ *   ramener à la même base ("current-basis"). On fetch en parallèle les événements
+ *   split du ticker et on multiplie chaque point historique par le facteur cumulatif.
+ *   Sans ça, BKNG (split 10:1 en mai 2024) afficherait une dilution fictive de +50%/an.
  */
 export async function getSharesHistory(ticker: string): Promise<SharesHistoryPoint[] | null> {
   return yahooLimiter.schedule(async () => {
     try {
-      const data = await fetchTimeseries(ticker, ['annualDilutedAverageShares', 'annualOrdinarySharesNumber']);
+      // Parallélise : la fenêtre timeseries (shares + FCF) et la liste des splits sont indépendantes.
+      // On embarque FCF directement ici pour pouvoir calculer un fcfPerShareCagr split-adjusté
+      // sans relancer un appel Yahoo séparé (et sans dépendre de Finnhub epsGrowth5Y qui peut
+      // ne pas avoir absorbé un split récent).
+      const [data, splits] = await Promise.all([
+        fetchTimeseries(ticker, ['annualDilutedAverageShares', 'annualOrdinarySharesNumber', 'annualFreeCashFlow']),
+        fetchSplitEvents(ticker),
+      ]);
       if (data.timeseries?.error) {
         console.warn(`[yahoo ${ticker}]`, data.timeseries.error.description);
         return null;
@@ -145,6 +164,7 @@ export async function getSharesHistory(ticker: string): Promise<SharesHistoryPoi
 
       const diluted = extractSeries(data, 'annualDilutedAverageShares');
       const ordinary = extractSeries(data, 'annualOrdinarySharesNumber');
+      const fcfSeries = extractSeries(data, 'annualFreeCashFlow');
       const series = diluted.length >= 2 ? diluted : ordinary;
       const source = diluted.length >= 2 ? 'diluted' : 'ordinary';
 
@@ -153,11 +173,25 @@ export async function getSharesHistory(ticker: string): Promise<SharesHistoryPoi
         return null;
       }
 
+      // Index FCF par année pour join O(1)
+      const fcfByYear: Record<number, number> = {};
+      for (const p of fcfSeries) fcfByYear[p.fiscalYear] = p.value;
+
       const points: SharesHistoryPoint[] = series
-        .map(s => ({ fiscalYear: s.fiscalYear, dilutedShares: s.value }))
+        .map(s => {
+          const asOfTs = Math.floor(new Date(s.date + 'T00:00:00Z').getTime() / 1000);
+          const factor = cumulativeSplitFactor(splits, asOfTs);
+          return {
+            fiscalYear: s.fiscalYear,
+            dilutedShares: s.value * factor,
+            fcf: fcfByYear[s.fiscalYear] ?? null,
+          };
+        })
         .sort((a, b) => a.fiscalYear - b.fiscalYear);
 
-      console.log(`[yahoo ${ticker}] ${points.length} années via ${source} (${points[0]!.fiscalYear} → ${points[points.length - 1]!.fiscalYear})`);
+      const splitNote = splits.length > 0 ? ` [${splits.length} split-adj]` : '';
+      const fcfNote = fcfSeries.length > 0 ? ` +FCF${fcfSeries.length}` : '';
+      console.log(`[yahoo ${ticker}] ${points.length} années via ${source} (${points[0]!.fiscalYear} → ${points[points.length - 1]!.fiscalYear})${splitNote}${fcfNote}`);
       return points;
     } catch (e) {
       console.warn(`[yahoo ${ticker}] échec — fallback Finnhub :`, (e as Error).message);
@@ -174,6 +208,36 @@ export function computeSharesCagr(history: SharesHistoryPoint[] | null): number 
   const years = newest.fiscalYear - oldest.fiscalYear;
   if (years < 1 || oldest.dilutedShares <= 0) return null;
   return Math.pow(newest.dilutedShares / oldest.dilutedShares, 1 / years) - 1;
+}
+
+/**
+ * CAGR du FCF par action depuis l'historique Yahoo (split-adjusté).
+ *
+ * Pourquoi pas Finnhub epsGrowth5Y ? Parce que :
+ *   1. EPS ≠ FCF/action (un revenu net peut être boosté par one-shots, le FCF non).
+ *   2. Sur un ticker qui vient de splitter (ex BKNG 25:1 en avril 2026), Finnhub peut
+ *      mettre quelques semaines à split-ajuster ses ratios → epsGrowth5Y devient fictif.
+ *
+ * On calcule directement : fcfPerShare(année) = fcf / dilutedShares
+ *                          CAGR = (fcfPerShare_newest / fcfPerShare_oldest)^(1/years) - 1
+ *
+ * Renvoie null si :
+ *   - moins de 2 points avec FCF + shares > 0
+ *   - les bornes ont un FCF négatif (CAGR mathématiquement non-pertinent)
+ *   - série trop courte (< 2 ans)
+ */
+export function computeFcfPerShareCagr(history: SharesHistoryPoint[] | null): number | null {
+  if (!history || history.length < 2) return null;
+  const valid = history.filter(p => p.fcf != null && p.fcf > 0 && p.dilutedShares > 0);
+  if (valid.length < 2) return null;
+  const oldest = valid[0]!;
+  const newest = valid[valid.length - 1]!;
+  const years = newest.fiscalYear - oldest.fiscalYear;
+  if (years < 1) return null;
+  const fcfPsOld = oldest.fcf! / oldest.dilutedShares;
+  const fcfPsNew = newest.fcf! / newest.dilutedShares;
+  if (fcfPsOld <= 0 || fcfPsNew <= 0) return null;
+  return Math.pow(fcfPsNew / fcfPsOld, 1 / years) - 1;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -211,24 +275,41 @@ export async function getQuarterlyTimeseries(
   // Cap raisonnable : 50 ans (= "All")
   const safeYears = Math.max(1, Math.min(years, 50));
 
+  // Les séries de share count sont as-filed (pré-split). Pour l'histogramme UI on doit
+  // ajuster pour que la courbe ne montre PAS une marche d'escalier artificielle au split.
+  const isShareCountSeries = /Shares?(Number|Outstanding|AverageShares)?$/.test(type)
+    || /^quarterly(Basic|Diluted)Average?Shares/.test(type);
+
   return yahooLimiter.schedule(async () => {
     try {
       // Hack : fetchTimeseries calcule period1 = 6 ans en arrière par défaut, ce qui est
       // insuffisant pour 10Y/20Y/All. On passe par fetchTimeseriesCustomPeriod ci-dessous.
-      const data = await fetchTimeseriesCustomPeriod(ticker, [type], safeYears + 1);
+      // Parallélise les splits si on en a besoin.
+      const [data, splits] = await Promise.all([
+        fetchTimeseriesCustomPeriod(ticker, [type], safeYears + 1),
+        isShareCountSeries ? fetchSplitEvents(ticker) : Promise.resolve([] as Awaited<ReturnType<typeof fetchSplitEvents>>),
+      ]);
       if (data.timeseries?.error) {
         console.warn(`[yahoo ts ${ticker}/${type}]`, data.timeseries.error.description);
         return [];
       }
-      const points = extractSeriesFull(data, type);
+      const rawPoints = extractSeriesFull(data, type);
       const cutoffDate = new Date();
       cutoffDate.setFullYear(cutoffDate.getFullYear() - safeYears);
       const cutoffIso = cutoffDate.toISOString().slice(0, 10);
-      const filtered = points
+
+      const adjusted = rawPoints
         .filter(p => p.date >= cutoffIso)
+        .map(p => {
+          if (!isShareCountSeries || splits.length === 0) return p;
+          const asOfTs = Math.floor(new Date(p.date + 'T00:00:00Z').getTime() / 1000);
+          return { date: p.date, value: p.value * cumulativeSplitFactor(splits, asOfTs) };
+        })
         .sort((a, b) => a.date.localeCompare(b.date));
-      console.log(`[yahoo ts ${ticker}/${type}] ${filtered.length} pts sur ${safeYears}Y`);
-      return filtered;
+
+      const splitNote = isShareCountSeries && splits.length > 0 ? ` [${splits.length} split-adj]` : '';
+      console.log(`[yahoo ts ${ticker}/${type}] ${adjusted.length} pts sur ${safeYears}Y${splitNote}`);
+      return adjusted;
     } catch (e) {
       console.warn(`[yahoo ts ${ticker}/${type}] échec :`, (e as Error).message);
       return [];

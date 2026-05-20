@@ -11,6 +11,7 @@
 import { finnhubLimiter } from '../lib/limiter.js';
 import { fetchWithRetry } from '../lib/retry.js';
 import type { TimeseriesPoint } from '@lubin/shared';
+import { fetchSplitEvents, cumulativeSplitFactor } from './yahooSplits.js';
 
 const BASE = 'https://finnhub.io/api/v1';
 const TOKEN = process.env.FINNHUB_API_KEY ?? '';
@@ -186,7 +187,7 @@ export async function getReportedTimeseries(
   // Cas simple : annual
   if (freq === 'annual') {
     const points = extractAndPack(annualFilings, cfg);
-    return filterWindow(points, cap);
+    return splitAdjustIfNeeded(filterWindow(points, cap), ticker, metric);
   }
 
   // Cas quarterly
@@ -236,7 +237,29 @@ export async function getReportedTimeseries(
   }
 
   points.sort((a, b) => a.date.localeCompare(b.date));
-  return filterWindow(points, cap);
+  return splitAdjustIfNeeded(filterWindow(points, cap), ticker, metric);
+}
+
+/**
+ * Si la métrique est un share count, on ramène toutes les valeurs en current-basis
+ * en multipliant chaque point par le facteur cumulatif des splits qui ont eu lieu
+ * APRÈS la date du point. Sinon (revenue, debt, etc.), no-op.
+ *
+ * Les splits sont fournis par Yahoo /v8/finance/chart (universel, gratuit, indépendant
+ * de la source de la timeseries elle-même).
+ */
+async function splitAdjustIfNeeded(
+  points: TimeseriesPoint[],
+  ticker: string,
+  metric: MetricKey,
+): Promise<TimeseriesPoint[]> {
+  if (metric !== 'shares' || points.length === 0) return points;
+  const splits = await fetchSplitEvents(ticker);
+  if (splits.length === 0) return points;
+  return points.map(p => {
+    const asOfTs = Math.floor(new Date(p.date + 'T00:00:00Z').getTime() / 1000);
+    return { date: p.date, value: p.value * cumulativeSplitFactor(splits, asOfTs) };
+  });
 }
 
 function extractAndPack(filings: FinnhubFiling[], cfg: MetricConfig): TimeseriesPoint[] {
