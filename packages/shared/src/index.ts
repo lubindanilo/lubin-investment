@@ -106,6 +106,8 @@ export interface AnalyzeResponse {
   qualUpdatedAt: string | null;
   /** Si défini : message expliquant pourquoi l'analyse qualitative n'a pas pu se faire (quota, timeout…) */
   qualError?: string | null;
+  /** Date du prochain + dernier earnings (Finnhub /calendar/earnings) */
+  earnings: EarningsInfo;
 }
 
 // ─── Watchlist ─────────────────────────────────────────────────────────────
@@ -117,6 +119,35 @@ export interface WatchlistEntry {
   pfcfTTM: number | null;
   scoreChiffres: number;
   scoreChiffresMax: number;
+}
+
+// ─── Earnings (calendrier + résultats) ─────────────────────────────────────
+
+export interface EarningsResult {
+  /** YYYY-MM-DD */
+  date: string;
+  quarter: number;
+  year: number;
+  /** "bmo" (before market open), "amc" (after market close), null si inconnu */
+  hour: string | null;
+  epsActual: number | null;
+  epsEstimate: number | null;
+  /** epsActual - epsEstimate */
+  epsSurprise: number | null;
+  /** epsSurprise / |epsEstimate|, en décimal (0.115 = +11.5%) */
+  epsSurprisePct: number | null;
+  /** En USD millions */
+  revenueActual: number | null;
+  revenueEstimate: number | null;
+  /** revenueSurprise / |revenueEstimate|, en décimal */
+  revenueSurprisePct: number | null;
+}
+
+export interface EarningsInfo {
+  /** Le prochain earnings (dans le futur). Null si pas connu. */
+  next: EarningsResult | null;
+  /** Le dernier earnings (dans le passé). Null si pas connu. */
+  last: EarningsResult | null;
 }
 
 // ─── Séries temporelles trimestrielles (histogrammes UI) ───────────────────

@@ -9,6 +9,7 @@ import { SectionHeader } from '../components/SectionHeader.js';
 import { ValuationPanel } from '../components/ValuationPanel.js';
 import { NewsPanel } from '../components/NewsPanel.js';
 import { TradingViewChart } from '../components/TradingViewChart.js';
+import { EarningsPanel } from '../components/EarningsPanel.js';
 import './AnalysePage.css';
 
 function scoreOf(items: { statut: 'pass' | 'fail' | 'warn' }[]) {
@@ -139,6 +140,8 @@ export function AnalysePage() {
             onAddWatchlist={addToWatchlist}
             alreadyInWatchlist={inWatchlist.has(analysis.ticker)}
           />
+
+          <EarningsPanel ticker={analysis.ticker} earnings={analysis.earnings} />
 
           <TradingViewChart ticker={analysis.ticker} />
 

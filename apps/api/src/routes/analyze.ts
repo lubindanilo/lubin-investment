@@ -10,6 +10,7 @@ import type { AnalyzeResponse, ValoParams } from '@lubin/shared';
 import { getMetric, getProfile2, getQuote, getCompanyNews } from '../services/finnhub.js';
 import { getProfile } from '../services/fmp.js';
 import { getSharesHistory, computeSharesCagr } from '../services/yahoo.js';
+import { getEarningsInfo } from '../services/earnings.js';
 import { fetchQualitative, type QualitativeResult } from '../services/openai.js';
 import { computeDerivedMetrics, buildQuantitativeCriteria, buildValuation, filterNews } from '../services/derivedMetrics.js';
 import { prisma } from '../db/client.js';
@@ -77,13 +78,14 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   };
 
   console.log(`[analyze ${ticker}] start`);
-  const [metric, fhProfile, quote, rawNews, fmpProfile, sharesHistory] = await Promise.all([
+  const [metric, fhProfile, quote, rawNews, fmpProfile, sharesHistory, earnings] = await Promise.all([
     timed('finnhub metric',    getMetric(ticker)).catch(() => null),
     timed('finnhub profile2',  getProfile2(ticker)).catch(() => null),
     timed('finnhub quote',     getQuote(ticker)).catch(() => null),
     timed('finnhub news',      getCompanyNews(ticker)).catch(() => []),
     timed('fmp profile',       getProfile(ticker)).catch(() => null),
     timed('yahoo shares',      getSharesHistory(ticker)).catch(() => null),
+    timed('finnhub earnings',  getEarningsInfo(ticker)).catch(() => ({ next: null, last: null })),
   ]);
   console.log(`[analyze ${ticker}] data layer done in ${ms()}ms`);
 
@@ -155,6 +157,7 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
     valoParams,
     qualUpdatedAt: updatedAt?.toISOString() ?? null,
     qualError,
+    earnings,
   };
   res.json(response);
 }));
