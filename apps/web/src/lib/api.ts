@@ -115,6 +115,18 @@ export const api = {
     const q = new URLSearchParams({ ticker, years: String(years) });
     return safeRequest<PfcfHistoryResponse>(`/api/pfcf-history?${q}`);
   },
+  priceHistory(ticker: string, years: number, interval: '1d' | '1wk' | '1mo' = '1mo') {
+    const q = new URLSearchParams({ ticker, years: String(years), interval });
+    return safeRequest<{
+      ticker: string;
+      symbol: string;
+      currency: string;
+      years: number;
+      interval: string;
+      points: { date: string; value: number }[];
+      cached: boolean;
+    }>(`/api/price-history?${q}`);
+  },
   watchlist: {
     list: () => safeRequest<WatchlistEntry[]>('/api/watchlist'),
     add: (ticker: string) =>

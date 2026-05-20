@@ -10,6 +10,7 @@ import { SectionHeader } from '../components/SectionHeader.js';
 import { ValuationPanel } from '../components/ValuationPanel.js';
 import { NewsPanel } from '../components/NewsPanel.js';
 import { TradingViewChart } from '../components/TradingViewChart.js';
+import { PriceChart } from '../components/PriceChart.js';
 import { EarningsPanel } from '../components/EarningsPanel.js';
 import './AnalysePage.css';
 
@@ -168,13 +169,18 @@ export function AnalysePage() {
 
           <EarningsPanel ticker={analysis.ticker} earnings={analysis.earnings} />
 
-          {analysis.fundamentalsAvailable ? (
+          {analysis.fundamentalsSource === 'yahoo' ? (
+            // Tickers EU résolus via Yahoo : TradingView ne reconnaît pas COPN sans préfixe
+            // SIX:COPN. On affiche notre propre chart Recharts avec données Yahoo /v8/chart
+            // (qui a 20-30 ans de prix pour les EU, contre 4 ans pour les fundamentals).
+            <PriceChart ticker={analysis.ticker} currency={analysis.currency} />
+          ) : analysis.fundamentalsAvailable ? (
             <TradingViewChart ticker={analysis.ticker} />
           ) : (
             <div className="chart-section chart-unavailable">
               <div className="chart-title"><span>Cours boursier — {analysis.ticker}</span></div>
               <div className="chart-unavailable-msg">
-                📉 Graphique non disponible — le symbole <code>{analysis.ticker}</code> n'est pas indexé sur TradingView sans son préfixe d'exchange (ex : <code>SIX:{analysis.ticker}</code> pour la Suisse).
+                📉 Graphique non disponible — le symbole <code>{analysis.ticker}</code> n'est pas indexé sur TradingView et Yahoo ne le résout pas.
               </div>
             </div>
           )}
