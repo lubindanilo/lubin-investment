@@ -101,8 +101,16 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ ticker, params }) },
     );
   },
-  refreshQual(ticker: string) {
-    return safeRequest<{ qualUpdatedAt: string }>(`/api/analyze/refresh-qual`, {
+  /** Génère ce qui manque (business si absent + management si absent). Hit GPT. */
+  generateQualitative(ticker: string) {
+    return safeRequest<AnalyzeResponse>(`/api/analyze/qualitative`, {
+      method: 'POST',
+      body: JSON.stringify({ ticker }),
+    });
+  },
+  /** Force un GPT call pour MANAGEMENT uniquement. Business reste intouchable. */
+  refreshManagement(ticker: string) {
+    return safeRequest<AnalyzeResponse>(`/api/analyze/refresh-management`, {
       method: 'POST',
       body: JSON.stringify({ ticker }),
     });

@@ -1,19 +1,25 @@
 /**
  * Routes d'analyse :
- *   GET  /api/analyze?ticker=MEDP            → analyse complète
- *   POST /api/analyze/revalue                → recalcul valo
- *   POST /api/analyze/refresh-qual           → re-fetch qualitatif (bypass cache)
+ *   GET  /api/analyze?ticker=MEDP             → quant + qualitative IF cached (PAS d'appel GPT auto)
+ *   POST /api/analyze/qualitative             → génère ce qui manque (business si absent + management si absent)
+ *   POST /api/analyze/refresh-management      → force GPT call pour management uniquement
+ *   POST /api/analyze/revalue                 → recalcul valorisation avec inputs custom
+ *
+ * Architecture cache :
+ *   - BusinessAnalysis  : lifetime cache, jamais regénéré automatiquement
+ *   - ManagementAnalysis : refreshable via bouton dédié (CEO/CFO peuvent changer)
+ *   - Tout GET /api/analyze ne déclenche JAMAIS d'appel GPT — seuls les POST le font
  */
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
-import type { AnalyzeResponse, ValoParams } from '@lubin/shared';
+import type { AnalyzeResponse, ValoParams, Criterion } from '@lubin/shared';
 import { getMetric, getProfile2, getQuote, getCompanyNews } from '../services/finnhub.js';
 import { getProfile } from '../services/fmp.js';
 import { getSharesHistory, computeSharesCagr, computeFcfPerShareCagr } from '../services/yahoo.js';
 import { resolveYahooTicker } from '../services/yahooResolve.js';
 import { getYahooFundamentals } from '../services/yahooFundamentals.js';
 import { getEarningsInfo } from '../services/earnings.js';
-import { fetchQualitative, type QualitativeResult } from '../services/openai.js';
+import { fetchBusinessAnalysis, fetchManagementAnalysis } from '../services/openai.js';
 import { computeDerivedMetrics, buildQuantitativeCriteria, buildValuation, filterNews } from '../services/derivedMetrics.js';
 import { prisma } from '../db/client.js';
 import { asyncHandler, ApiError } from '../middleware/error.js';
@@ -21,7 +27,6 @@ import { analyzeLimiter } from '../middleware/rateLimit.js';
 
 export const analyzeRouter: Router = Router();
 
-const QUAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z.\-]{1,8}$/);
 const ValoParamsSchema = z.object({
   targetReturn: z.number().min(0.01).max(1),
@@ -29,48 +34,29 @@ const ValoParamsSchema = z.object({
   targetMultiple: z.number().min(1).max(100),
 });
 
-/** Schéma actuel : 10 business + 5 management. Si le cache est plus court, on re-fetch. */
 const EXPECTED_BUSINESS = 10;
 const EXPECTED_MGMT = 5;
 
-function isCacheCompatible(data: unknown): data is QualitativeResult {
-  const d = data as Partial<QualitativeResult> | null;
-  return !!d
-    && Array.isArray(d.business) && d.business.length >= EXPECTED_BUSINESS
-    && Array.isArray(d.management) && d.management.length >= EXPECTED_MGMT;
+/**
+ * Vérifie qu'une donnée stockée en cache business correspond au schéma actuel (10 critères).
+ * Si le schéma a évolué (ex passage de 8 → 10 critères), on considère que c'est obsolète.
+ */
+function isBusinessCacheValid(data: unknown): data is Criterion[] {
+  return Array.isArray(data) && data.length >= EXPECTED_BUSINESS;
+}
+function isManagementCacheValid(data: unknown): data is Criterion[] {
+  return Array.isArray(data) && data.length >= EXPECTED_MGMT;
 }
 
-async function loadOrFetchQualitative(
-  ticker: string,
-  company: string,
-  chiffresContext: { nom: string; valeur: string; statut: string }[],
-  sbcShareOfFcf: number | null,
-  forceRefresh = false,
-) {
-  if (!forceRefresh) {
-    const cached = await prisma.qualitativeCache.findUnique({ where: { ticker } });
-    if (cached && Date.now() - cached.updatedAt.getTime() < QUAL_TTL_MS && isCacheCompatible(cached.data)) {
-      return { data: cached.data, updatedAt: cached.updatedAt };
-    }
-    if (cached) console.log(`[cache] ${ticker} obsolète (schéma changé) — re-fetch`);
-  }
-  const fresh = await fetchQualitative({ ticker, company, chiffresContext, sbcShareOfFcf });
-  const upserted = await prisma.qualitativeCache.upsert({
-    where: { ticker },
-    update: { data: fresh as object },
-    create: { ticker, data: fresh as object },
-  });
-  return { data: fresh, updatedAt: upserted.updatedAt };
-}
-
-analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Response) => {
-  const parse = TickerSchema.safeParse(req.query.ticker);
-  if (!parse.success) throw new ApiError(400, 'ticker invalide', parse.error.flatten());
-  const ticker = parse.data;
+/**
+ * Helper : récupère les bases nécessaires (metric, profile, quote, shares, earnings)
+ * via Finnhub + Yahoo fallback. Renvoie un blob unique utilisable par GET /analyze
+ * et POST /analyze/qualitative (qui en a besoin pour reconstruire le contexte).
+ */
+async function loadQuantData(ticker: string) {
   const t0 = Date.now();
   const ms = () => Date.now() - t0;
 
-  // Mesure le temps de chaque appel externe individuellement
   const timed = <T>(name: string, p: Promise<T>): Promise<T> => {
     const start = Date.now();
     return p.then(
@@ -91,11 +77,6 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   ]);
   console.log(`[analyze ${ticker}] data layer done in ${ms()}ms`);
 
-  // ─── Vérification de qualité de données ─────────────────────────────
-  // Cas 1 : Finnhub a complètement crashé (metric vide ET pas de quote) → 503, retry.
-  // Cas 2 : Finnhub répond mais sans fondamentaux (typique tickers non-US comme SIX:COPN) →
-  //         on continue avec fundamentalsAvailable=false, le front affichera un bandeau.
-  //         L'analyse qualitative GPT reste valide via web search.
   const metricEmpty = !metric || !metric.metric || Object.keys(metric.metric).length === 0;
   if (metricEmpty && !quote) {
     throw new ApiError(
@@ -108,7 +89,6 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   const hasMetricData = !metricEmpty;
   const finnhubUsable = hasPrice || hasMetricData;
 
-  // Décide la source : Finnhub si disponible, sinon Yahoo fallback (tickers EU non-US).
   let fundamentalsSource: 'finnhub' | 'yahoo' | null = null;
   let currency = 'USD';
   let yahooSymbol: string | undefined;
@@ -121,9 +101,6 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
     const yahooFcfPerShareCagr = computeFcfPerShareCagr(sharesHistory);
     metrics = computeDerivedMetrics({ metric, profile: fhProfile, quote, yahooShareCagr, yahooFcfPerShareCagr });
   } else {
-    // Finnhub vide → tenter Yahoo. Résolution + fetch en 2 temps :
-    //   1) resolveYahooTicker probe les suffixes (.SW, .PA, …) pour trouver l'exchange
-    //   2) getYahooFundamentals fait UN appel batch sur toutes les séries annuelles
     console.log(`[analyze ${ticker}] Finnhub vide → fallback Yahoo`);
     const resolved = await timed('yahoo resolve', resolveYahooTicker(ticker)).catch(() => null);
     if (resolved) {
@@ -135,38 +112,40 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
         fundamentalsSource = 'yahoo';
         metrics = yfund.metrics;
       } else {
-        // Yahoo trouvé mais fondamentaux indispos (rare — small cap européenne)
         metrics = computeDerivedMetrics({ metric, profile: fhProfile, quote, yahooShareCagr: null, yahooFcfPerShareCagr: null });
       }
     } else {
-      // Ni Finnhub ni Yahoo → on continue tout de même (mode "qualitatif seul")
       metrics = computeDerivedMetrics({ metric, profile: fhProfile, quote, yahooShareCagr: null, yahooFcfPerShareCagr: null });
     }
   }
 
   const fundamentalsAvailable = fundamentalsSource !== null;
   const company = companyFromSource ?? fhProfile?.name ?? fmpProfile?.companyName ?? ticker;
-  const quant = buildQuantitativeCriteria(metrics);
 
-  const chiffresContext = quant.map(c => ({ nom: c.nom, valeur: c.valeur, statut: c.statut }));
-  const tGpt = Date.now();
-  // Mode dégradé : si GPT échoue (quota, timeout, parsing), on continue avec un placeholder.
-  // L'utilisateur voit les chiffres + valo (qui ne dépendent pas de GPT) et un message clair.
-  let qual: QualitativeResult = { verdict_direct: '', business: [], management: [] };
-  let updatedAt: Date | null = null;
-  let qualError: string | null = null;
-  try {
-    const result = await loadOrFetchQualitative(ticker, company, chiffresContext, metrics.sbcShareOfFcf);
-    qual = result.data;
-    updatedAt = result.updatedAt;
-  } catch (e) {
-    const msg = (e as Error).message;
-    qualError = /quota|insufficient|429/i.test(msg)
-      ? 'Quota OpenAI épuisé — augmente ta limite ou passe sur gpt-4o-mini-search-preview'
-      : `Analyse qualitative indisponible : ${msg.slice(0, 120)}`;
-    console.warn(`[analyze ${ticker}] GPT failed : ${msg}`);
-  }
-  console.log(`[analyze ${ticker}] qualitative ${Date.now() - tGpt}ms (total ${ms()}ms)`);
+  return {
+    metrics, company, fundamentalsAvailable, fundamentalsSource, currency, yahooSymbol,
+    rawNews, earnings,
+  };
+}
+
+/**
+ * Construit la réponse AnalyzeResponse à partir du quant + des qualitatives (optionnels).
+ * Si `business`/`management` sont null, le score est calculé uniquement sur les critères
+ * disponibles (chiffres + valorisation).
+ */
+function buildResponse(args: {
+  ticker: string;
+  quant: Awaited<ReturnType<typeof loadQuantData>>;
+  business: Criterion[] | null;
+  verdictDirect: string | null;
+  management: Criterion[] | null;
+  businessCachedAt: Date | null;
+  managementCachedAt: Date | null;
+}): AnalyzeResponse {
+  const { ticker, quant, business, verdictDirect, management, businessCachedAt, managementCachedAt } = args;
+  const { metrics, company, fundamentalsAvailable, fundamentalsSource, currency, yahooSymbol, rawNews, earnings } = quant;
+
+  const chiffres = buildQuantitativeCriteria(metrics);
 
   const histGrowth = metrics.fcfPerShareCagr ?? metrics.revenueCagr;
   const fcfGrowth = histGrowth != null ? Math.max(0.03, Math.min(histGrowth * 0.75, 0.20)) : 0.10;
@@ -176,10 +155,14 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   const valoParams: ValoParams = { targetReturn: 0.15, fcfGrowth, targetMultiple };
   const valuation = buildValuation(metrics, valoParams);
 
-  const criteres = [...quant, ...qual.business, ...qual.management, valuation];
-  // Si pas de fondamentaux, les 11 critères "chiffres" + la valorisation sont tous à warn (N/A) —
-  // donner un score 17/27 (15 qualitatif passent souvent) est trompeur. On ne note que
-  // ce qui est réellement évaluable : exclure les critères dont la valeur est explicitement N/A.
+  // Si business/management ne sont pas (encore) cachés, on les omet du tableau de critères.
+  // Le front affichera un CTA "Générer l'analyse qualitative" à leur place.
+  const criteres = [
+    ...chiffres,
+    ...(business ?? []),
+    ...(management ?? []),
+    valuation,
+  ];
   const evaluables = fundamentalsAvailable
     ? criteres
     : criteres.filter(c => c.valeur !== 'N/A');
@@ -188,7 +171,7 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   const score = pass + Math.round(warn * 0.5);
   const scoreMax = evaluables.length;
 
-  const response: AnalyzeResponse = {
+  return {
     ticker,
     company,
     price: metrics.price,
@@ -196,21 +179,161 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
     criteres,
     score,
     scoreMax,
-    achat: score / scoreMax >= 0.7,
-    verdict_direct: qual.verdict_direct,
+    achat: scoreMax > 0 && score / scoreMax >= 0.7,
+    verdict_direct: verdictDirect ?? '',
     news: filterNews(rawNews),
     valuation,
     valoParams,
-    qualUpdatedAt: updatedAt?.toISOString() ?? null,
-    qualError,
+    businessCachedAt: businessCachedAt?.toISOString() ?? null,
+    managementCachedAt: managementCachedAt?.toISOString() ?? null,
+    qualitativeAvailable: business != null && management != null,
     earnings,
     fundamentalsAvailable,
     fundamentalsSource,
     currency,
     yahooSymbol,
   };
-  res.json(response);
+}
+
+// ─── GET /api/analyze ──────────────────────────────────────────────────────
+// Lit cache business + cache management. Ne fait JAMAIS d'appel GPT.
+// Si l'un des deux n'est pas en cache, on renvoie quand même la réponse — le front
+// affichera le bouton "Générer l'analyse qualitative".
+
+analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Response) => {
+  const parse = TickerSchema.safeParse(req.query.ticker);
+  if (!parse.success) throw new ApiError(400, 'ticker invalide', parse.error.flatten());
+  const ticker = parse.data;
+
+  const quant = await loadQuantData(ticker);
+
+  // Lecture des 2 caches qualitatifs en parallèle (gratuit, pas d'API call GPT)
+  const [businessRow, managementRow] = await Promise.all([
+    prisma.businessAnalysis.findUnique({ where: { ticker } }),
+    prisma.managementAnalysis.findUnique({ where: { ticker } }),
+  ]);
+
+  const business = businessRow && isBusinessCacheValid(businessRow.business) ? businessRow.business : null;
+  const management = managementRow && isManagementCacheValid(managementRow.management) ? managementRow.management : null;
+
+  res.json(buildResponse({
+    ticker,
+    quant,
+    business,
+    verdictDirect: businessRow?.verdictDirect ?? null,
+    management,
+    businessCachedAt: business ? businessRow!.createdAt : null,
+    managementCachedAt: management ? managementRow!.updatedAt : null,
+  }));
 }));
+
+// ─── POST /api/analyze/qualitative ─────────────────────────────────────────
+// Génère ce qui manque (business + management si absents). Renvoie la réponse complète.
+// C'est le SEUL endroit où on déclenche un appel GPT (à part /refresh-management).
+
+analyzeRouter.post('/qualitative', analyzeLimiter, asyncHandler(async (req: Request, res: Response) => {
+  const parse = TickerSchema.safeParse(req.body?.ticker);
+  if (!parse.success) throw new ApiError(400, 'ticker invalide');
+  const ticker = parse.data;
+
+  const quant = await loadQuantData(ticker);
+  const company = quant.company;
+  const chiffres = buildQuantitativeCriteria(quant.metrics);
+  const chiffresContext = chiffres.map(c => ({ nom: c.nom, valeur: c.valeur, statut: c.statut }));
+
+  // Lecture initiale du cache
+  const [existingBiz, existingMgmt] = await Promise.all([
+    prisma.businessAnalysis.findUnique({ where: { ticker } }),
+    prisma.managementAnalysis.findUnique({ where: { ticker } }),
+  ]);
+
+  // Génère le business UNIQUEMENT s'il est absent ou schéma obsolète.
+  // Le business est cache À VIE — pas de TTL, pas de regen automatique.
+  let business: Criterion[];
+  let verdictDirect: string;
+  let businessCachedAt: Date;
+  if (existingBiz && isBusinessCacheValid(existingBiz.business)) {
+    business = existingBiz.business;
+    verdictDirect = existingBiz.verdictDirect;
+    businessCachedAt = existingBiz.createdAt;
+    console.log(`[analyze ${ticker}] business cache hit (${businessCachedAt.toISOString().slice(0, 10)})`);
+  } else {
+    console.log(`[analyze ${ticker}] business cache miss → GPT call`);
+    const fresh = await fetchBusinessAnalysis({ ticker, company, chiffresContext, sbcShareOfFcf: quant.metrics.sbcShareOfFcf });
+    const upserted = await prisma.businessAnalysis.upsert({
+      where: { ticker },
+      update: { business: fresh.business as object, verdictDirect: fresh.verdict_direct },
+      create: { ticker, business: fresh.business as object, verdictDirect: fresh.verdict_direct },
+    });
+    business = fresh.business;
+    verdictDirect = fresh.verdict_direct;
+    businessCachedAt = upserted.createdAt;
+  }
+
+  // Génère le management UNIQUEMENT s'il est absent.
+  // Le management est cache jusqu'à refresh explicite via /refresh-management.
+  let management: Criterion[];
+  let managementCachedAt: Date;
+  if (existingMgmt && isManagementCacheValid(existingMgmt.management)) {
+    management = existingMgmt.management;
+    managementCachedAt = existingMgmt.updatedAt;
+    console.log(`[analyze ${ticker}] management cache hit (${managementCachedAt.toISOString().slice(0, 10)})`);
+  } else {
+    console.log(`[analyze ${ticker}] management cache miss → GPT call`);
+    const fresh = await fetchManagementAnalysis({ ticker, company, chiffresContext, sbcShareOfFcf: quant.metrics.sbcShareOfFcf });
+    const upserted = await prisma.managementAnalysis.upsert({
+      where: { ticker },
+      update: { management: fresh.management as object },
+      create: { ticker, management: fresh.management as object },
+    });
+    management = fresh.management;
+    managementCachedAt = upserted.updatedAt;
+  }
+
+  res.json(buildResponse({
+    ticker, quant, business, verdictDirect, management, businessCachedAt, managementCachedAt,
+  }));
+}));
+
+// ─── POST /api/analyze/refresh-management ──────────────────────────────────
+// Force un GPT call POUR LE MANAGEMENT UNIQUEMENT. Le business reste intouchable.
+// Cas d'usage : CEO part, CFO scandale, nouveau président — l'utilisateur sait
+// quand il y a un changement, déclenche un refresh.
+
+analyzeRouter.post('/refresh-management', analyzeLimiter, asyncHandler(async (req: Request, res: Response) => {
+  const parse = TickerSchema.safeParse(req.body?.ticker);
+  if (!parse.success) throw new ApiError(400, 'ticker invalide');
+  const ticker = parse.data;
+
+  const quant = await loadQuantData(ticker);
+  const chiffres = buildQuantitativeCriteria(quant.metrics);
+  const chiffresContext = chiffres.map(c => ({ nom: c.nom, valeur: c.valeur, statut: c.statut }));
+
+  console.log(`[analyze ${ticker}] refresh-management forced → GPT call`);
+  const fresh = await fetchManagementAnalysis({ ticker, company: quant.company, chiffresContext, sbcShareOfFcf: quant.metrics.sbcShareOfFcf });
+  const upserted = await prisma.managementAnalysis.upsert({
+    where: { ticker },
+    update: { management: fresh.management as object },
+    create: { ticker, management: fresh.management as object },
+  });
+
+  // On lit aussi business pour pouvoir reconstruire la response complète
+  const businessRow = await prisma.businessAnalysis.findUnique({ where: { ticker } });
+  const business = businessRow && isBusinessCacheValid(businessRow.business) ? businessRow.business : null;
+
+  res.json(buildResponse({
+    ticker,
+    quant,
+    business,
+    verdictDirect: businessRow?.verdictDirect ?? null,
+    management: fresh.management,
+    businessCachedAt: business ? businessRow!.createdAt : null,
+    managementCachedAt: upserted.updatedAt,
+  }));
+}));
+
+// ─── POST /api/analyze/revalue ─────────────────────────────────────────────
+// Recalcul de la valorisation avec inputs custom (slider UI). Pas de GPT.
 
 analyzeRouter.post('/revalue', asyncHandler(async (req: Request, res: Response) => {
   const tickerParse = TickerSchema.safeParse(req.body?.ticker);
@@ -224,25 +347,4 @@ analyzeRouter.post('/revalue', asyncHandler(async (req: Request, res: Response) 
   const metrics = computeDerivedMetrics({ metric, profile: null, quote });
   const valuation = buildValuation(metrics, { ...paramsParse.data, targetReturn: 0.15 });
   res.json({ valuation, metrics });
-}));
-
-analyzeRouter.post('/refresh-qual', analyzeLimiter, asyncHandler(async (req: Request, res: Response) => {
-  const tickerParse = TickerSchema.safeParse(req.body?.ticker);
-  if (!tickerParse.success) throw new ApiError(400, 'ticker invalide');
-  const ticker = tickerParse.data;
-
-  const [metric, profile, quote, sharesHistory] = await Promise.all([
-    getMetric(ticker).catch(() => null),
-    getProfile2(ticker).catch(() => null),
-    getQuote(ticker).catch(() => null),
-    getSharesHistory(ticker).catch(() => null),
-  ]);
-  const yahooShareCagr = computeSharesCagr(sharesHistory);
-  const yahooFcfPerShareCagr = computeFcfPerShareCagr(sharesHistory);
-  const metrics = computeDerivedMetrics({ metric, profile, quote, yahooShareCagr, yahooFcfPerShareCagr });
-  const company = profile?.name ?? ticker;
-  const quant = buildQuantitativeCriteria(metrics);
-  const chiffresContext = quant.map(c => ({ nom: c.nom, valeur: c.valeur, statut: c.statut }));
-  const { data, updatedAt } = await loadOrFetchQualitative(ticker, company, chiffresContext, metrics.sbcShareOfFcf, true);
-  res.json({ qualitative: data, qualUpdatedAt: updatedAt.toISOString() });
 }));

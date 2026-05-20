@@ -25,13 +25,35 @@ model User {
   watchlist WatchlistEntry[]
 }
 
-/// Cache qualitatif par ticker — PARTAGÉ entre tous les utilisateurs.
-/// L'analyse GPT d'un business ne dépend pas de l'utilisateur qui demande, donc on dédup'.
-model QualitativeCache {
-  ticker    String   @id
-  /// JSON contenant { business: Criterion[], management: Criterion[], verdict_direct: string }
-  data      Json
-  updatedAt DateTime @default(now()) @updatedAt
+/// Analyse qualitative du BUSINESS MODEL — cache À VIE (immutable une fois généré).
+///
+/// Pourquoi immutable : le business model d'une boîte évolue à l'échelle des années
+/// (refonte produit, pivot stratégique), pas des semaines. Et chaque génération coûte
+/// un appel GPT-4o-search-preview (~$0.05-0.10). On freeze pour éviter de cramer la clé
+/// API à chaque rechargement. Si vraiment il faut regénérer (rare cas), suppression
+/// manuelle de la ligne DB.
+///
+/// verdictDirect = la 1-2 phrases punchy affichée en haut du ScoreCard. Vit avec
+/// business car concerne le nature de la société.
+model BusinessAnalysis {
+  ticker        String   @id
+  /// JSON contenant business: Criterion[] (10 critères)
+  business      Json
+  /// 1-2 phrases punchy
+  verdictDirect String
+  createdAt     DateTime @default(now())
+}
+
+/// Analyse qualitative du MANAGEMENT — RAFRAÎCHISSABLE manuellement.
+///
+/// Le management peut changer (départ CEO/CFO, scandale, board reshuffle) à des
+/// échelles plus courtes que le business. L'utilisateur déclenche un refresh via
+/// bouton dédié. Pas de TTL automatique — l'utilisateur sait quand il y a un changement.
+model ManagementAnalysis {
+  ticker     String   @id
+  /// JSON contenant management: Criterion[] (5 critères)
+  management Json
+  updatedAt  DateTime @default(now()) @updatedAt
 }
 
 /// Watchlist par utilisateur. Un même ticker peut apparaître chez plusieurs users (différentes lignes).

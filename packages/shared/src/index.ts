@@ -102,10 +102,21 @@ export interface AnalyzeResponse {
   /** Valorisation DCF avec params en input */
   valuation: ValuationResult;
   valoParams: ValoParams;
-  /** Timestamp ISO de la dernière mise à jour qualitative (cache) */
-  qualUpdatedAt: string | null;
-  /** Si défini : message expliquant pourquoi l'analyse qualitative n'a pas pu se faire (quota, timeout…) */
-  qualError?: string | null;
+  /**
+   * Timestamp ISO de la génération initiale du business model (lifetime cache).
+   * Null si l'analyse qualitative n'a pas encore été générée pour ce ticker.
+   */
+  businessCachedAt: string | null;
+  /**
+   * Timestamp ISO du dernier refresh management. Null si pas encore généré.
+   * L'utilisateur peut rafraîchir via le bouton dédié quand le CEO/CFO change.
+   */
+  managementCachedAt: string | null;
+  /**
+   * true si business + management sont tous les deux cachés et inclus dans criteres.
+   * false → le front affiche un CTA "Générer l'analyse qualitative".
+   */
+  qualitativeAvailable: boolean;
   /** Date du prochain + dernier earnings (Finnhub /calendar/earnings) */
   earnings: EarningsInfo;
   /**

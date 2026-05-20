@@ -83,14 +83,30 @@ export function AnalysePage() {
     }
   }
 
-  async function refreshQualitative() {
+  // État "génération en cours" pour le bouton "Générer l'analyse qualitative"
+  const [generatingQual, setGeneratingQual] = useState(false);
+
+  async function generateQualitative() {
+    if (!analysis) return;
+    setGeneratingQual(true);
+    try {
+      const data = await api.generateQualitative(analysis.ticker);
+      setAnalysis(data);
+      toast.push('success', 'Analyse qualitative générée');
+    } catch (e) {
+      toast.push('error', (e as Error).message);
+    } finally {
+      setGeneratingQual(false);
+    }
+  }
+
+  async function refreshManagementOnly() {
     if (!analysis) return;
     setRefreshingQual(true);
     try {
-      await api.refreshQual(analysis.ticker);
-      const data = await api.analyze(analysis.ticker);
+      const data = await api.refreshManagement(analysis.ticker);
       setAnalysis(data);
-      toast.push('success', 'Analyse qualitative mise à jour');
+      toast.push('success', 'Données management mises à jour');
     } catch (e) {
       toast.push('error', (e as Error).message);
     } finally {
@@ -107,10 +123,11 @@ export function AnalysePage() {
     setAnalysis({ ...analysis, criteres, valuation, valoParams: params, score, achat: score / analysis.scoreMax >= 0.7 });
   }
 
-  // 11 chiffres + 10 business + 5 management + 1 valuation = 27
+  // 11 chiffres + (10 business + 5 management si qualitativeAvailable) + 1 valuation
+  // L'ordre est garanti par buildResponse côté backend (chiffres puis business puis management puis valo).
   const chiffres = analysis?.criteres.slice(0, 11) ?? [];
-  const business = analysis?.criteres.slice(11, 21) ?? [];
-  const management = analysis?.criteres.slice(21, 26) ?? [];
+  const business = analysis?.qualitativeAvailable ? analysis.criteres.slice(11, 21) : [];
+  const management = analysis?.qualitativeAvailable ? analysis.criteres.slice(21, 26) : [];
 
   return (
     <>
@@ -141,14 +158,6 @@ export function AnalysePage() {
 
       {analysis && (
         <>
-          {analysis.qualError && (
-            <div className="qual-error-banner">
-              <div className="qual-error-title">⚠ Analyse qualitative indisponible</div>
-              <div className="qual-error-msg">{analysis.qualError}</div>
-              <div className="qual-error-hint">Les chiffres + valorisation restent valides. Vérifie ton quota OpenAI sur platform.openai.com/usage.</div>
-            </div>
-          )}
-
           {!analysis.fundamentalsAvailable && (
             <div className="fund-missing-banner">
               <div className="fund-missing-title">⚠ Données fondamentales indisponibles pour {analysis.ticker}</div>
@@ -188,21 +197,43 @@ export function AnalysePage() {
           <SectionHeader title="Chiffres (11)" sub="Calculés à partir des données fondamentales temps réel" score={scoreOf(chiffres)} />
           <CriteriaGrid items={chiffres} ticker={analysis.ticker} />
 
-          <SectionHeader
-            title="Qualitatif (15)"
-            sub={`Business model + management${analysis.qualUpdatedAt ? ` · analyse du ${new Date(analysis.qualUpdatedAt).toLocaleDateString('fr-FR')}` : ''}`}
-            right={
-              <button className="btn-secondary" onClick={refreshQualitative} disabled={refreshingQual}>
-                {refreshingQual ? <><span className="spinner" /> Mise à jour…</> : '↻ Rafraîchir l\'analyse qualitative'}
+          {/* Section qualitative — soit affichée (cache hit), soit CTA "Générer" (cache miss).
+              On évite tout appel GPT automatique : l'utilisateur clique explicitement quand il veut. */}
+          {analysis.qualitativeAvailable ? (
+            <>
+              <SectionHeader
+                title="Qualitatif (15)"
+                sub={`Business model${analysis.businessCachedAt ? ` · cache à vie depuis ${new Date(analysis.businessCachedAt).toLocaleDateString('fr-FR')}` : ''} + Management${analysis.managementCachedAt ? ` · maj du ${new Date(analysis.managementCachedAt).toLocaleDateString('fr-FR')}` : ''}`}
+              />
+
+              <SectionHeader title="Business model (10)" sub="🔒 Cache à vie — l'identité d'une boîte ne change pas vite" score={scoreOf(business)} />
+              <CriteriaGrid items={business} />
+
+              <SectionHeader
+                title="Management (5)"
+                sub="Allocation, ancienneté, transparence, skin in the game, rachats opportunistes"
+                score={scoreOf(management)}
+                right={
+                  <button className="btn-secondary" onClick={refreshManagementOnly} disabled={refreshingQual}>
+                    {refreshingQual ? <><span className="spinner" /> Mise à jour…</> : '↻ Rafraîchir le Management'}
+                  </button>
+                }
+              />
+              <CriteriaGrid items={management} />
+            </>
+          ) : (
+            <div className="qual-cta">
+              <div className="qual-cta-icon">🤖</div>
+              <div className="qual-cta-title">Analyse qualitative pas encore générée</div>
+              <div className="qual-cta-text">
+                Les 15 critères qualitatifs (business model + management) sont calculés via GPT-4 avec recherche web (~10 s, déclenche un appel API payant).
+                <br/>Une fois généré, le <strong>business model est cache à vie</strong> (immutable) et le <strong>management peut être rafraîchi manuellement</strong>.
+              </div>
+              <button className="btn-primary qual-cta-btn" onClick={generateQualitative} disabled={generatingQual}>
+                {generatingQual ? <><span className="spinner" /> Génération en cours…</> : '🤖 Générer l\'analyse qualitative'}
               </button>
-            }
-          />
-
-          <SectionHeader title="Business model (10)" score={scoreOf(business)} />
-          <CriteriaGrid items={business} />
-
-          <SectionHeader title="Management (5)" sub="Allocation, ancienneté, transparence, skin in the game, rachats opportunistes" score={scoreOf(management)} />
-          <CriteriaGrid items={management} />
+            </div>
+          )}
 
           <SectionHeader title="Valorisation" />
           <ValuationPanel analysis={analysis} onValuationChanged={onValuationChanged} />
@@ -215,15 +246,13 @@ export function AnalysePage() {
 }
 
 function AnalyseLoadingState() {
-  // Progression temporelle calée sur les durées réelles observées (cache miss complet) :
+  // L'analyse quant est maintenant beaucoup plus rapide : on ne déclenche plus GPT
+  // automatiquement (split en endpoint dédié, à la demande de l'utilisateur).
   //   - Étape 1 (data layer Finnhub + Yahoo)        : ~1.5 s
-  //   - Étape 2 (GPT search-preview)                : ~9 s
-  //   - Étape 3 (calcul valorisation)               : ~0.1 s
-  // L'étape "active" porte le spinner. Une étape passée affiche ✓. Aucune boucle.
+  //   - Étape 2 (calcul des ratios + valorisation)  : ~0.1 s
   const STEPS: { label: string; until: number }[] = [
     { label: 'Récupération des fondamentaux (Finnhub + Yahoo)', until: 1500 },
-    { label: 'Recherche web qualitative (GPT-4o search)',       until: 11000 },
-    { label: 'Calcul de la valorisation',                       until: Infinity },
+    { label: 'Calcul des ratios et de la valorisation',         until: Infinity },
   ];
 
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -257,7 +286,7 @@ function AnalyseLoadingState() {
           );
         })}
         <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text3)' }}>
-          ~10 s si nouvelle analyse, ~2 s si déjà en cache (jusqu'à 30 jours).
+          ~2 s — chiffres + valorisation seulement. L'analyse qualitative (GPT) se génère à la demande après affichage.
         </div>
       </div>
     </div>
