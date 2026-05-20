@@ -108,6 +108,13 @@ export interface AnalyzeResponse {
   qualError?: string | null;
   /** Date du prochain + dernier earnings (Finnhub /calendar/earnings) */
   earnings: EarningsInfo;
+  /**
+   * False quand Finnhub n'a pas du tout de fondamentaux pour ce ticker
+   * (typique des tickers non-US — Suisse, France, Allemagne…).
+   * Le front affiche alors un bandeau, masque le chart TradingView et
+   * grise les critères chiffres (tous à N/A).
+   */
+  fundamentalsAvailable: boolean;
 }
 
 // ─── Watchlist ─────────────────────────────────────────────────────────────

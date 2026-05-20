@@ -147,6 +147,19 @@ export function AnalysePage() {
               <div className="qual-error-hint">Les chiffres + valorisation restent valides. Vérifie ton quota OpenAI sur platform.openai.com/usage.</div>
             </div>
           )}
+
+          {!analysis.fundamentalsAvailable && (
+            <div className="fund-missing-banner">
+              <div className="fund-missing-title">⚠ Données fondamentales indisponibles pour {analysis.ticker}</div>
+              <div className="fund-missing-msg">
+                Notre source (Finnhub free tier) couvre principalement les actions cotées aux US. Pour les sociétés européennes (Suisse, France, Allemagne, etc.) ou asiatiques, les chiffres et la valorisation ne sont pas accessibles.
+              </div>
+              <div className="fund-missing-hint">
+                Seule l'analyse qualitative (GPT recherche web) reste valide ci-dessous. Si la société a une cotation ADR US (ex : Nestlé <code>NSRGY</code>, ASML <code>ASML</code>, LVMH <code>LVMUY</code>), essaie ce ticker à la place.
+              </div>
+            </div>
+          )}
+
           <ScoreCard
             analysis={analysis}
             onAddWatchlist={addToWatchlist}
@@ -155,7 +168,16 @@ export function AnalysePage() {
 
           <EarningsPanel ticker={analysis.ticker} earnings={analysis.earnings} />
 
-          <TradingViewChart ticker={analysis.ticker} />
+          {analysis.fundamentalsAvailable ? (
+            <TradingViewChart ticker={analysis.ticker} />
+          ) : (
+            <div className="chart-section chart-unavailable">
+              <div className="chart-title"><span>Cours boursier — {analysis.ticker}</span></div>
+              <div className="chart-unavailable-msg">
+                📉 Graphique non disponible — le symbole <code>{analysis.ticker}</code> n'est pas indexé sur TradingView sans son préfixe d'exchange (ex : <code>SIX:{analysis.ticker}</code> pour la Suisse).
+              </div>
+            </div>
+          )}
 
           <SectionHeader title="Chiffres (11)" sub="Calculés à partir des données fondamentales temps réel" score={scoreOf(chiffres)} />
           <CriteriaGrid items={chiffres} ticker={analysis.ticker} />

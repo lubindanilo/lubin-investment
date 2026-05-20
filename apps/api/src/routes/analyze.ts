@@ -90,10 +90,10 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   console.log(`[analyze ${ticker}] data layer done in ${ms()}ms`);
 
   // ─── Vérification de qualité de données ─────────────────────────────
-  // Si Finnhub est complètement KO (metric vide ET pas de quote), inutile de continuer :
-  //   - on aurait 10 critères "N/A" + un verdict_direct éventuellement obsolète du cache
-  //   - le user pense que la boîte n'a pas de données alors que c'est Finnhub qui plante
-  // On échoue proprement avec un message clair qui déclenche le bouton "Réessayer" côté UI.
+  // Cas 1 : Finnhub a complètement crashé (metric vide ET pas de quote) → 503, retry.
+  // Cas 2 : Finnhub répond mais sans fondamentaux (typique tickers non-US comme SIX:COPN) →
+  //         on continue avec fundamentalsAvailable=false, le front affichera un bandeau.
+  //         L'analyse qualitative GPT reste valide via web search.
   const metricEmpty = !metric || !metric.metric || Object.keys(metric.metric).length === 0;
   if (metricEmpty && !quote) {
     throw new ApiError(
@@ -102,6 +102,9 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
       `Finnhub n'a pas répondu pour ${ticker}. Vérifie la clé API ou réessaie dans 1 minute (rate limit).`,
     );
   }
+  const hasPrice = !!quote?.c && quote.c > 0;
+  const hasMetricData = !metricEmpty;
+  const fundamentalsAvailable = hasPrice || hasMetricData;
 
   const yahooShareCagr = computeSharesCagr(sharesHistory);
   const yahooFcfPerShareCagr = computeFcfPerShareCagr(sharesHistory);
@@ -138,10 +141,16 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   const valuation = buildValuation(metrics, valoParams);
 
   const criteres = [...quant, ...qual.business, ...qual.management, valuation];
-  const pass = criteres.filter(c => c.statut === 'pass').length;
-  const warn = criteres.filter(c => c.statut === 'warn').length;
+  // Si pas de fondamentaux, les 11 critères "chiffres" + la valorisation sont tous à warn (N/A) —
+  // donner un score 17/27 (15 qualitatif passent souvent) est trompeur. On ne note que
+  // ce qui est réellement évaluable : exclure les critères dont la valeur est explicitement N/A.
+  const evaluables = fundamentalsAvailable
+    ? criteres
+    : criteres.filter(c => c.valeur !== 'N/A');
+  const pass = evaluables.filter(c => c.statut === 'pass').length;
+  const warn = evaluables.filter(c => c.statut === 'warn').length;
   const score = pass + Math.round(warn * 0.5);
-  const scoreMax = criteres.length;
+  const scoreMax = evaluables.length;
 
   const response: AnalyzeResponse = {
     ticker,
@@ -159,6 +168,7 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
     qualUpdatedAt: updatedAt?.toISOString() ?? null,
     qualError,
     earnings,
+    fundamentalsAvailable,
   };
   res.json(response);
 }));
