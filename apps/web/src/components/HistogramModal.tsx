@@ -13,10 +13,12 @@ interface Props {
   ticker: string;
   criterionName: string;
   config: CriterionHistogram;
+  /** Devise reporting du ticker (USD, CHF, EUR…) — pour les axes/tooltips des séries currency */
+  currency?: string;
   onClose: () => void;
 }
 
-export function HistogramModal({ ticker, criterionName, config, onClose }: Props) {
+export function HistogramModal({ ticker, criterionName, config, currency = 'USD', onClose }: Props) {
   const [period, setPeriod] = useState<TimeseriesPeriod>('5Y');
   const [data, setData] = useState<TimeseriesPoint[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -115,15 +117,21 @@ export function HistogramModal({ ticker, criterionName, config, onClose }: Props
         </header>
 
         <div className="hist-periods">
-          {PERIODS.map(p => (
-            <button
-              key={p}
-              className={`period-btn ${p === period ? 'active' : ''}`}
-              onClick={() => setPeriod(p)}
-            >
-              {p}
-            </button>
-          ))}
+          {euAnnualOnly ? (
+            // Tickers EU : Yahoo n'expose que ~4 années annuelles. Les boutons 1Y/5Y/…/All
+            // renverraient tous les mêmes 4 points → UX trompeuse. On affiche un tag static.
+            <span className="period-static">4 ans annuels (max Yahoo pour ce ticker)</span>
+          ) : (
+            PERIODS.map(p => (
+              <button
+                key={p}
+                className={`period-btn ${p === period ? 'active' : ''}`}
+                onClick={() => setPeriod(p)}
+              >
+                {p}
+              </button>
+            ))
+          )}
         </div>
 
         {loading && <div className="hist-loading"><span className="spinner" /> Chargement…</div>}
@@ -175,7 +183,7 @@ export function HistogramModal({ ticker, criterionName, config, onClose }: Props
                   <Tooltip
                     contentStyle={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}
                     labelStyle={{ color: 'var(--text2)', fontFamily: 'IBM Plex Mono, monospace' }}
-                    formatter={(v) => [formatFull(Number(v), config.unit), config.label]}
+                    formatter={(v) => [formatFull(Number(v), config.unit, currency), config.label]}
                     labelFormatter={d => freq === 'quarterly' ? `Trimestre ${formatQuarter(String(d))}` : `Année ${String(d).slice(0, 4)}`}
                   />
                   <ReferenceLine y={0} stroke="var(--text3)" strokeWidth={1} />
@@ -191,12 +199,12 @@ export function HistogramModal({ ticker, criterionName, config, onClose }: Props
 
             {stats && (
               <div className="hist-stats">
-                <Stat label="Dernier trimestre" value={`${formatFull(stats.latest.value, config.unit)} (${formatQuarter(stats.latest.date)})`} />
-                <Stat label="Moyenne période" value={formatFull(stats.avg, config.unit)} />
+                <Stat label={freq === 'quarterly' ? 'Dernier trimestre' : 'Dernière année'} value={`${formatFull(stats.latest.value, config.unit, currency)} (${freq === 'quarterly' ? formatQuarter(stats.latest.date) : stats.latest.date.slice(0, 4)})`} />
+                <Stat label="Moyenne période" value={formatFull(stats.avg, config.unit, currency)} />
                 {stats.cagr !== null && (
                   <Stat label="CAGR sur période" value={(stats.cagr * 100).toFixed(2) + '%/an'} accent={stats.cagr >= 0 ? 'green' : 'red'} />
                 )}
-                <Stat label="Trimestres" value={String(data.length)} />
+                <Stat label={freq === 'quarterly' ? 'Trimestres' : 'Années'} value={String(data.length)} />
               </div>
             )}
           </>
@@ -224,16 +232,16 @@ function formatCompact(v: number, unit: CriterionHistogram['unit']): string {
     return v.toFixed(0);
   }
   // currency / raw : compact $
-  if (Math.abs(v) >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
-  if (Math.abs(v) >= 1e6) return '$' + (v / 1e6).toFixed(0) + 'M';
-  if (Math.abs(v) >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'k';
-  return '$' + v.toFixed(0);
+  if (Math.abs(v) >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+  if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(0) + 'M';
+  if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(0) + 'k';
+  return v.toFixed(0);
 }
 
-function formatFull(v: number, unit: CriterionHistogram['unit']): string {
+function formatFull(v: number, unit: CriterionHistogram['unit'], currency = 'USD'): string {
   if (unit === 'percent') return v.toFixed(2) + '%';
   if (unit === 'count') return v.toLocaleString('fr-FR');
-  return '$' + v.toLocaleString('fr-FR', { maximumFractionDigits: 0 });
+  return `${v.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} ${currency}`;
 }
 
 function formatQuarter(isoDate: string): string {

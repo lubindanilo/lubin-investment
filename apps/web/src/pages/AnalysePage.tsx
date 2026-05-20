@@ -176,7 +176,7 @@ export function AnalysePage() {
             alreadyInWatchlist={inWatchlist.has(analysis.ticker)}
           />
 
-          <EarningsPanel ticker={analysis.ticker} earnings={analysis.earnings} />
+          <EarningsPanel ticker={analysis.ticker} earnings={analysis.earnings} currency={analysis.currency} />
 
           {analysis.fundamentalsSource === 'yahoo' ? (
             // Tickers EU résolus via Yahoo : TradingView ne reconnaît pas COPN sans préfixe
@@ -195,7 +195,7 @@ export function AnalysePage() {
           )}
 
           <SectionHeader title="Chiffres (11)" sub="Calculés à partir des données fondamentales temps réel" score={scoreOf(chiffres)} />
-          <CriteriaGrid items={chiffres} ticker={analysis.ticker} />
+          <CriteriaGrid items={chiffres} ticker={analysis.ticker} currency={analysis.currency} annualOnly={analysis.fundamentalsSource === 'yahoo'} />
 
           {/* Section qualitative — soit affichée (cache hit), soit CTA "Générer" (cache miss).
               On évite tout appel GPT automatique : l'utilisateur clique explicitement quand il veut. */}
@@ -206,7 +206,7 @@ export function AnalysePage() {
                 sub={`Business model${analysis.businessCachedAt ? ` · cache à vie depuis ${new Date(analysis.businessCachedAt).toLocaleDateString('fr-FR')}` : ''} + Management${analysis.managementCachedAt ? ` · maj du ${new Date(analysis.managementCachedAt).toLocaleDateString('fr-FR')}` : ''}`}
               />
 
-              <SectionHeader title="Business model (10)" sub="🔒 Cache à vie — l'identité d'une boîte ne change pas vite" score={scoreOf(business)} />
+              <SectionHeader title="Business model (10)" score={scoreOf(business)} />
               <CriteriaGrid items={business} />
 
               <SectionHeader
@@ -246,15 +246,8 @@ export function AnalysePage() {
 }
 
 function AnalyseLoadingState() {
-  // L'analyse quant est maintenant beaucoup plus rapide : on ne déclenche plus GPT
-  // automatiquement (split en endpoint dédié, à la demande de l'utilisateur).
-  //   - Étape 1 (data layer Finnhub + Yahoo)        : ~1.5 s
-  //   - Étape 2 (calcul des ratios + valorisation)  : ~0.1 s
-  const STEPS: { label: string; until: number }[] = [
-    { label: 'Récupération des fondamentaux (Finnhub + Yahoo)', until: 1500 },
-    { label: 'Calcul des ratios et de la valorisation',         until: Infinity },
-  ];
-
+  // L'analyse quant est rapide (~1-2 s). Plus de GPT dans le flow, plus besoin du
+  // tracker de progression multi-étapes. Spinner + compteur de secondes suffit.
   const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
     const start = Date.now();
@@ -262,32 +255,14 @@ function AnalyseLoadingState() {
     return () => clearInterval(id);
   }, []);
 
-  const activeIdx = STEPS.findIndex(s => elapsedMs < s.until);
-  const elapsedSec = (elapsedMs / 1000).toFixed(1);
-
   return (
     <div className="empty-state">
       <div className="empty-state-icon"><span className="spinner" /></div>
-      <div className="empty-state-text">Analyse en cours… <span style={{ color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>({elapsedSec}s)</span></div>
-      <div className="empty-state-sub" style={{ marginTop: 12, display: 'inline-block', textAlign: 'left' }}>
-        {STEPS.map((s, i) => {
-          const done = i < activeIdx;
-          const active = i === activeIdx;
-          return (
-            <div key={i} style={{
-              opacity: done || active ? 1 : 0.4,
-              padding: '3px 0',
-              fontFamily: active ? 'inherit' : 'inherit',
-              transition: 'opacity 0.2s',
-            }}>
-              {done ? '✓ ' : active ? <span className="spinner" style={{ width: 10, height: 10, marginRight: 6, verticalAlign: 'middle' }} /> : '○ '}
-              {s.label}
-            </div>
-          );
-        })}
-        <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text3)' }}>
-          ~2 s — chiffres + valorisation seulement. L'analyse qualitative (GPT) se génère à la demande après affichage.
-        </div>
+      <div className="empty-state-text">
+        Analyse en cours…{' '}
+        <span style={{ color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>
+          ({(elapsedMs / 1000).toFixed(1)}s)
+        </span>
       </div>
     </div>
   );

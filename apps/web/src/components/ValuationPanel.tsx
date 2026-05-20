@@ -41,12 +41,12 @@ export function ValuationPanel({ analysis, onValuationChanged }: {
         </div>
         {raw.currentPrice != null && raw.fcfPsNow != null && raw.buyPrice != null && (
           <div className="valo-stats">
-            <Stat label="Prix actuel" value={`${raw.currentPrice.toFixed(2)}$`} />
-            <Stat label="FCF/action TTM" value={`${raw.fcfPsNow.toFixed(2)}$`} />
+            <Stat label="Prix actuel" value={`${raw.currentPrice.toFixed(2)} ${analysis.currency}`} />
+            <Stat label="FCF/action TTM" value={`${raw.fcfPsNow.toFixed(2)} ${analysis.currency}`} />
             <Stat label="P/FCF actuel" value={`${raw.currentPfcf?.toFixed(1) ?? 'N/A'}×`} accent="brand" />
             <Stat
               label="Prix d'achat cible"
-              value={`${raw.buyPrice.toFixed(2)}$`}
+              value={`${raw.buyPrice.toFixed(2)} ${analysis.currency}`}
               accent={(raw.discountPct ?? 0) >= 0 ? 'green' : 'red'}
             />
           </div>

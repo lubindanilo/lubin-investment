@@ -21,7 +21,7 @@ function extractPfcfMultiple(c: Criterion): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-export function CriterionCard({ c, ticker }: { c: Criterion; ticker?: string }) {
+export function CriterionCard({ c, ticker, currency = 'USD', annualOnly = false }: { c: Criterion; ticker?: string; currency?: string; annualOnly?: boolean }) {
   const histogramConfig = CRITERION_HISTOGRAMS[c.nom];
   const lineConfig = CRITERION_LINECHARTS[c.nom];
   // Un critère ne peut être que d'un seul type (line OU histo) — line gagne s'il y a un conflit.
@@ -63,6 +63,7 @@ export function CriterionCard({ c, ticker }: { c: Criterion; ticker?: string }) 
           ticker={ticker}
           criterionName={c.nom}
           config={histogramConfig}
+          currency={currency}
           onClose={() => setOpen(false)}
         />
       )}
@@ -71,6 +72,7 @@ export function CriterionCard({ c, ticker }: { c: Criterion; ticker?: string }) 
         <PfcfChartModal
           ticker={ticker}
           currentPfcf={extractPfcfMultiple(c)}
+          annualOnly={annualOnly}
           onClose={() => setOpen(false)}
         />
       )}
@@ -78,11 +80,11 @@ export function CriterionCard({ c, ticker }: { c: Criterion; ticker?: string }) 
   );
 }
 
-export function CriteriaGrid({ items, ticker }: { items: Criterion[]; ticker?: string }) {
+export function CriteriaGrid({ items, ticker, currency, annualOnly }: { items: Criterion[]; ticker?: string; currency?: string; annualOnly?: boolean }) {
   return (
     <div className="criteria-grid">
       {items.map((c, i) => (
-        <CriterionCard key={i} c={c} ticker={ticker} />
+        <CriterionCard key={i} c={c} ticker={ticker} currency={currency} annualOnly={annualOnly} />
       ))}
     </div>
   );

@@ -76,9 +76,7 @@ export function AuthPage({ initialMode = 'login' }: { initialMode?: Mode }) {
       <div className="auth-card">
         <h1 className="auth-title">{mode === 'login' ? 'Connexion' : 'Créer un compte'}</h1>
         <p className="auth-sub">
-          {mode === 'login'
-            ? 'Connecte-toi pour accéder à ta watchlist.'
-            : 'Tes watchlists sont personnelles, ton analyse partagée pour économiser les API.'}
+          {mode === 'login' ? 'Connecte-toi pour accéder à ta watchlist.' : 'Crée un compte pour gérer ta watchlist.'}
         </p>
 
         <form onSubmit={onSubmit} className="auth-form" autoComplete="on">

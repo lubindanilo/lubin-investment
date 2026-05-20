@@ -108,9 +108,11 @@ export function WatchlistPage() {
   }, [toast]);
 
   useEffect(() => {
-    // Auto-refresh non-force : ne re-fetch que les snapshots > 30 min
-    load().then(() => refresh(false));
-  }, [load, refresh]);
+    // On charge les snapshots stockés en DB une seule fois au mount.
+    // Pas de re-fetch automatique des tickers (qui ferait N appels Finnhub à chaque visite) —
+    // l'utilisateur déclenche un refresh manuel via le bouton ↻ s'il veut des prix frais.
+    load();
+  }, [load]);
 
   async function addTicker() {
     const t = newTicker.trim().toUpperCase();

@@ -14,7 +14,6 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { AnalyzeResponse, ValoParams, Criterion } from '@lubin/shared';
 import { getMetric, getProfile2, getQuote, getCompanyNews } from '../services/finnhub.js';
-import { getProfile } from '../services/fmp.js';
 import { getSharesHistory, computeSharesCagr, computeFcfPerShareCagr } from '../services/yahoo.js';
 import { resolveYahooTicker } from '../services/yahooResolve.js';
 import { getYahooFundamentals } from '../services/yahooFundamentals.js';
@@ -66,12 +65,12 @@ async function loadQuantData(ticker: string) {
   };
 
   console.log(`[analyze ${ticker}] start`);
-  const [metric, fhProfile, quote, rawNews, fmpProfile, sharesHistory, earnings] = await Promise.all([
+  // 6 sources en parallèle — FMP retiré (redondant : Finnhub profile2 + Yahoo longName suffisent pour le nom de société).
+  const [metric, fhProfile, quote, rawNews, sharesHistory, earnings] = await Promise.all([
     timed('finnhub metric',    getMetric(ticker)).catch(() => null),
     timed('finnhub profile2',  getProfile2(ticker)).catch(() => null),
     timed('finnhub quote',     getQuote(ticker)).catch(() => null),
     timed('finnhub news',      getCompanyNews(ticker)).catch(() => []),
-    timed('fmp profile',       getProfile(ticker)).catch(() => null),
     timed('yahoo shares',      getSharesHistory(ticker)).catch(() => null),
     timed('finnhub earnings',  getEarningsInfo(ticker)).catch(() => ({ next: null, last: null })),
   ]);
@@ -120,7 +119,7 @@ async function loadQuantData(ticker: string) {
   }
 
   const fundamentalsAvailable = fundamentalsSource !== null;
-  const company = companyFromSource ?? fhProfile?.name ?? fmpProfile?.companyName ?? ticker;
+  const company = companyFromSource ?? fhProfile?.name ?? ticker;
 
   return {
     metrics, company, fundamentalsAvailable, fundamentalsSource, currency, yahooSymbol,

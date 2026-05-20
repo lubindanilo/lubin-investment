@@ -135,3 +135,15 @@
   color: var(--text2);
 }
 .hist-gap-warning strong { color: var(--orange); }
+
+/* Tag static affiché à la place du sélecteur de période pour les tickers EU/ADR
+   qui n'ont que 4 ans annuels (limite Yahoo) */
+.period-static {
+  font-size: 11px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--text2);
+  background: var(--bg2);
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}

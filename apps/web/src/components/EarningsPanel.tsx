@@ -8,7 +8,7 @@ import './EarningsPanel.css';
  *   - Revenue surprise (vs estimate)
  *   - Lien externe vers transcripts Seeking Alpha (pas d'API gratuite pour le transcript brut)
  */
-export function EarningsPanel({ ticker, earnings }: { ticker: string; earnings: EarningsInfo }) {
+export function EarningsPanel({ ticker, earnings, currency = 'USD' }: { ticker: string; earnings: EarningsInfo; currency?: string }) {
   const { next, last } = earnings;
   if (!next && !last) return null;  // pas de données → on n'affiche rien
 
@@ -28,14 +28,14 @@ export function EarningsPanel({ ticker, earnings }: { ticker: string; earnings: 
         </a>
       </div>
       <div className="earnings-grid">
-        {last && <EarningsCard label="Dernier rapport" e={last} />}
-        {next && <EarningsCard label="Prochain rapport" e={next} isFuture />}
+        {last && <EarningsCard label="Dernier rapport" e={last} currency={currency} />}
+        {next && <EarningsCard label="Prochain rapport" e={next} isFuture currency={currency} />}
       </div>
     </div>
   );
 }
 
-function EarningsCard({ label, e, isFuture = false }: { label: string; e: EarningsResult; isFuture?: boolean }) {
+function EarningsCard({ label, e, isFuture = false, currency = 'USD' }: { label: string; e: EarningsResult; isFuture?: boolean; currency?: string }) {
   const dateFmt = new Date(e.date + 'T12:00:00Z').toLocaleDateString('fr-FR', {
     day: '2-digit', month: 'short', year: 'numeric',
   });
@@ -50,14 +50,14 @@ function EarningsCard({ label, e, isFuture = false }: { label: string; e: Earnin
       </div>
       {isFuture ? (
         <div className="earnings-card-info">
-          <Field label="EPS attendu" value={e.epsEstimate != null ? e.epsEstimate.toFixed(2) + ' $' : '–'} />
-          <Field label="CA attendu" value={e.revenueEstimate != null ? formatRevenue(e.revenueEstimate) : '–'} />
+          <Field label="EPS attendu" value={e.epsEstimate != null ? `${e.epsEstimate.toFixed(2)} ${currency}` : '–'} />
+          <Field label="CA attendu" value={e.revenueEstimate != null ? formatRevenue(e.revenueEstimate, currency) : '–'} />
         </div>
       ) : (
         <div className="earnings-card-info">
           <Field
             label="EPS"
-            value={e.epsActual != null ? `${e.epsActual.toFixed(2)} $` : '–'}
+            value={e.epsActual != null ? `${e.epsActual.toFixed(2)} ${currency}` : '–'}
             sub={
               e.epsEstimate != null && e.epsSurprisePct != null
                 ? `vs ${e.epsEstimate.toFixed(2)} (${formatPct(e.epsSurprisePct)})`
@@ -67,10 +67,10 @@ function EarningsCard({ label, e, isFuture = false }: { label: string; e: Earnin
           />
           <Field
             label="Revenue"
-            value={e.revenueActual != null ? formatRevenue(e.revenueActual) : '–'}
+            value={e.revenueActual != null ? formatRevenue(e.revenueActual, currency) : '–'}
             sub={
               e.revenueEstimate != null && e.revenueSurprisePct != null
-                ? `vs ${formatRevenue(e.revenueEstimate)} (${formatPct(e.revenueSurprisePct)})`
+                ? `vs ${formatRevenue(e.revenueEstimate, currency)} (${formatPct(e.revenueSurprisePct)})`
                 : undefined
             }
             color={revBeat == null ? undefined : revBeat ? 'green' : 'red'}
@@ -91,12 +91,12 @@ function Field({ label, value, sub, color }: { label: string; value: string; sub
   );
 }
 
-function formatRevenue(amount: number): string {
-  // Finnhub renvoie le revenue en USD (pas millions). Affichage : M ou B selon taille.
+function formatRevenue(amount: number, currency = 'USD'): string {
+  // Le revenue est en valeur brute (pas millions). Affichage compact : M ou B selon taille.
   const abs = Math.abs(amount);
-  if (abs >= 1e9) return (amount / 1e9).toFixed(2) + ' B$';
-  if (abs >= 1e6) return (amount / 1e6).toFixed(0) + ' M$';
-  return amount.toFixed(0) + ' $';
+  if (abs >= 1e9) return `${(amount / 1e9).toFixed(2)} B ${currency}`;
+  if (abs >= 1e6) return `${(amount / 1e6).toFixed(0)} M ${currency}`;
+  return `${amount.toFixed(0)} ${currency}`;
 }
 
 function formatPct(p: number): string {

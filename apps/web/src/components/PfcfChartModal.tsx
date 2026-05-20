@@ -25,10 +25,13 @@ const PERIODS: TimeseriesPeriod[] = ['1Y', '5Y', '10Y', '20Y', 'All'];
 interface Props {
   ticker: string;
   currentPfcf: number | null;
+  /** True si le ticker n'a que des données annuelles (EU + ADRs étrangers comme ASML, NSRGY) →
+   *  ~4 points annuels max, le sélecteur de période n'a plus de sens. */
+  annualOnly?: boolean;
   onClose: () => void;
 }
 
-export function PfcfChartModal({ ticker, currentPfcf, onClose }: Props) {
+export function PfcfChartModal({ ticker, currentPfcf, annualOnly = false, onClose }: Props) {
   const [period, setPeriod] = useState<TimeseriesPeriod>('5Y');
   const [data, setData] = useState<PfcfHistoryPoint[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -87,15 +90,19 @@ export function PfcfChartModal({ ticker, currentPfcf, onClose }: Props) {
         </header>
 
         <div className="pfcf-periods">
-          {PERIODS.map(p => (
-            <button
-              key={p}
-              className={`period-btn ${p === period ? 'active' : ''}`}
-              onClick={() => setPeriod(p)}
-            >
-              {p}
-            </button>
-          ))}
+          {annualOnly ? (
+            <span className="period-static">4 ans annuels (max disponible pour ce ticker)</span>
+          ) : (
+            PERIODS.map(p => (
+              <button
+                key={p}
+                className={`period-btn ${p === period ? 'active' : ''}`}
+                onClick={() => setPeriod(p)}
+              >
+                {p}
+              </button>
+            ))
+          )}
         </div>
 
         {loading && <div className="pfcf-loading"><span className="spinner" /> Chargement…</div>}

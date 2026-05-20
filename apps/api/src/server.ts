@@ -65,7 +65,6 @@ app.get('/health', (_req, res) => {
       node: process.version,
       openai: !!process.env.OPENAI_API_KEY,
       finnhub: !!process.env.FINNHUB_API_KEY,
-      fmp: !!process.env.FMP_API_KEY,
       db: !!process.env.DATABASE_URL,
       auth: !!process.env.AUTH_SECRET,
       sentry: !!process.env.SENTRY_DSN,

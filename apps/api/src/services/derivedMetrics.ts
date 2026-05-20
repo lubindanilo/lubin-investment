@@ -218,26 +218,28 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
       explication: m.ccr == null ? 'Donnée indisponible' : m.ccr > 1 ? 'Les bénéfices deviennent vraiment du cash' : 'Une partie des bénéfices ne se transforme pas en cash',
     },
     (() => {
+      // Current ratio = Current Assets / Current Liabilities. Sa lecture :
+      //   < 1   → la boîte peut payer ses fournisseurs avec ce que ses clients lui paient (modèle "BFR négatif" type Amazon, Costco) — fort
+      //   1-1.5 → équilibre classique
+      //   > 1.5 → beaucoup de capital immobilisé en stocks + créances clients
       const cr = m.nwcCurrentRatio;
-      // On affiche le current ratio brut (vraie donnée Finnhub). Lui détermine
-      // le signe du BFR : CR < 1 → actifs courants < passifs courants → BFR négatif.
       const valeur = cr == null ? 'N/A' : cr.toFixed(2);
       let statut: 'pass' | 'warn' | 'fail' = 'warn';
       let explication = 'Donnée indisponible';
       if (cr != null) {
         if (cr < 1) {
           statut = 'pass';
-          explication = `Current ratio ${cr.toFixed(2)} → BFR négatif. Les clients payent avant les fournisseurs : modèle puissant (cf. Amazon, Costco).`;
+          explication = `${cr.toFixed(2)} — les clients payent avant les fournisseurs (modèle type Amazon, Costco)`;
         } else if (cr < 1.5) {
           statut = 'warn';
-          explication = `Current ratio ${cr.toFixed(2)} → BFR légèrement positif. Équilibre classique entre actifs courants (stocks, créances) et passifs courants.`;
+          explication = `${cr.toFixed(2)} — équilibre classique entre actifs courants et passifs courants`;
         } else {
           statut = 'fail';
-          explication = `Current ratio ${cr.toFixed(2)} → BFR élevé. Beaucoup de capital immobilisé en stocks et créances clients.`;
+          explication = `${cr.toFixed(2)} — beaucoup de capital immobilisé en stocks et créances clients`;
         }
       }
       return {
-        nom: 'BFR (Net Working Capital)',
+        nom: 'Current Ratio',
         valeur,
         cible: '< 1 (BFR négatif)',
         statut,

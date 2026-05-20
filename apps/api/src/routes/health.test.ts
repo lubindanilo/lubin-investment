@@ -15,8 +15,8 @@ describe('GET /health', () => {
     expect(res.body.env).toMatchObject({
       openai: true,
       finnhub: true,
-      fmp: true,
       db: true,
+      auth: true,
     });
   });
 });
