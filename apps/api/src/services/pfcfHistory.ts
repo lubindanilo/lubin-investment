@@ -135,9 +135,19 @@ export async function getPfcfHistory(ticker: string, years: number): Promise<Pfc
   const isEuTicker = !!resolved && resolved.symbol !== ticker;
 
   if (isEuTicker && resolved) {
-    return getPfcfHistoryEu(resolved.symbol, years);
+    return getPfcfHistoryAnnualYahoo(resolved.symbol, years);
   }
-  return getPfcfHistoryUs(ticker, years);
+
+  // Path US : tente Finnhub quarterly d'abord (vraies TTM rolling, ~60 pts).
+  // Si Finnhub renvoie 0 pt (cas des ADRs étrangers comme ASML, NSRGY, TSM qui ne filent
+  // que des 20-F annuels avec la SEC → financials-reported vide), fallback sur
+  // l'annual Yahoo (même flow que pour les EU, 4 pts annuels mais c'est mieux que rien).
+  const usResult = await getPfcfHistoryUs(ticker, years);
+  if (usResult.length === 0) {
+    console.log(`[pfcf ${ticker}] Finnhub vide → fallback annual Yahoo (probablement un ADR étranger)`);
+    return getPfcfHistoryAnnualYahoo(resolved?.symbol ?? ticker, years);
+  }
+  return usResult;
 }
 
 /** Path US : Finnhub quarterly + TTM rolling, ~60-240 points selon l'interval. */
@@ -184,12 +194,17 @@ async function getPfcfHistoryUs(ticker: string, years: number): Promise<PfcfHist
 }
 
 /**
- * Path EU : Yahoo annual seulement. On calcule un P/FCF par fin d'année fiscale :
+ * Path "annual Yahoo" : utilisé quand le quarterly Finnhub est indispo.
+ *
+ * 2 cas d'usage :
+ *   1. Tickers européens (NESN.SW, COPN.SW…) résolus via suffixe
+ *   2. ADRs étrangers cotés US (ASML, NSRGY, TSM…) qui filent en 20-F annuel
+ *      → Finnhub /financials-reported renvoie 0 quarter, on tombe sur ce path
+ *
+ * Yahoo annual ~4 ans → 4 points P/FCF (1 par fin d'année fiscale) :
  *   pfcf(année N) = price(fin année N) × shares(année N, split-adj) / FCF(année N)
- * Renvoie au max ~4 points (Yahoo plafonne à 4 ans pour les EU). C'est moins riche
- * que le quarterly mais ça donne quand même la tendance long terme du multiple.
  */
-async function getPfcfHistoryEu(yahooSymbol: string, years: number): Promise<PfcfHistoryPoint[]> {
+async function getPfcfHistoryAnnualYahoo(yahooSymbol: string, years: number): Promise<PfcfHistoryPoint[]> {
   // Fetch direct des séries annuelles + splits via le helper bas-niveau
   const [annualFcf, annualShares, prices, splits] = await Promise.all([
     fetchYahooAnnualBasic(yahooSymbol, 'annualFreeCashFlow'),
