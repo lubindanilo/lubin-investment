@@ -127,14 +127,14 @@ export function HistogramModal({ ticker, criterionName, config, onClose }: Props
 
         {!loading && !error && data && data.length > 0 && gaps.length > 0 && (
           <div className="hist-gap-warning">
-            <strong>⚠ Donnée incomplète</strong> : Finnhub n'a pas {gaps.reduce((s, g) => s + g.missingApprox, 0)} {freq === 'quarterly' ? 'trimestre(s)' : 'année(s)'} entre{' '}
+            <strong>⚠ Donnée incomplète</strong> : il manque environ {gaps.reduce((s, g) => s + g.missingApprox, 0)} {freq === 'quarterly' ? 'trimestre(s)' : 'année(s)'} entre{' '}
             {gaps.map((g, i) => (
               <span key={i}>
                 {i > 0 && ' et '}
                 <code>{formatDateShort(g.from)} → {formatDateShort(g.to)}</code>
               </span>
-            ))}.
-            {' '}Cause typique : <strong>changement de ticker</strong> (Fiserv <code>FISV</code> → <code>FI</code>, Meta <code>FB</code> → <code>META</code>, etc.) — essaie le nouveau symbol pour des données complètes. Le CAGR est désactivé car il ne serait pas comparable.
+            ))}
+            {' '}dans les données Finnhub pour ce ticker. Le CAGR est désactivé car il ne serait pas comparable sur série discontinue.
           </div>
         )}
 
