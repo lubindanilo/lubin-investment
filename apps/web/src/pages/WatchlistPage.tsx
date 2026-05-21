@@ -250,7 +250,7 @@ function WatchRow({ e, onOpen, onRemove }: { e: WatchlistEntry; onOpen: () => vo
     <tr onClick={onOpen}>
       <td><span className="wl-ticker">{e.ticker}</span></td>
       <td className="wl-name">{e.name}</td>
-      <td style={{ textAlign: 'right' }} className="wl-price">{e.price != null ? e.price.toFixed(2) + '$' : 'N/A'}</td>
+      <td style={{ textAlign: 'right' }} className="wl-price">{e.price != null ? `${e.price.toFixed(2)} ${e.currency ?? 'USD'}` : 'N/A'}</td>
       <td style={{ textAlign: 'right' }} className={`wl-pfcf ${pfcfCls}`}>
         {e.pfcfTTM != null ? e.pfcfTTM.toFixed(1) + '×' : 'N/A'}
       </td>

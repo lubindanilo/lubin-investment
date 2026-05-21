@@ -146,6 +146,10 @@ export interface WatchlistEntry {
   pfcfTTM: number | null;
   scoreChiffres: number;
   scoreChiffresMax: number;
+  /** Devise de reporting (USD pour Finnhub, CHF/EUR/GBP pour Yahoo selon l'exchange) */
+  currency?: string;
+  /** Source qui a fourni la donnée — utile pour distinguer EU vs US dans l'UI */
+  source?: 'finnhub' | 'yahoo' | null;
 }
 
 // ─── Earnings (calendrier + résultats) ─────────────────────────────────────
