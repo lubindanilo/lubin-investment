@@ -168,8 +168,15 @@ export async function getYahooFundamentals(
 
       const latestRev = latest(revenue);
       const latestNI = latest(netIncome);
-      const latestFcf = latest(fcf);
       const latestShares = latest(shares);
+
+      // Pour le P/FCF et les ratios dérivés du FCF, on prend la dernière année avec FCF > 0.
+      // Pourquoi : Yahoo annual contient parfois une année récente avec FCF négatif (ex Cosmo
+      // Pharma 2025) qui rendrait pfcfTTM = null alors que l'année N-1 a un FCF positif
+      // significatif. Cohérence avec pfcfHistory.ts qui skip aussi les années FCF ≤ 0.
+      // Pour les autres ratios (netMargin, fcfMargin, currentRatio…) on garde "latest" brut.
+      const latestFcf = latest(fcf);                         // brut (peut être négatif)
+      const latestPositiveFcf = latest(fcf.filter(p => p.value > 0)); // pour pfcfTTM uniquement
 
       // ─── Calcul des ratios ────────────────────────────────────────────
 
@@ -237,12 +244,15 @@ export async function getYahooFundamentals(
         : null;
       const nwc = currentRatio != null ? (currentRatio < 1 ? -1 : 1) : null;
 
-      // P/FCF TTM = market_cap / FCF. Yahoo donne shares latest, on a price → mcap
+      // P/FCF TTM = market_cap / FCF. Yahoo donne shares latest, on a price → mcap.
+      // On utilise le dernier FCF POSITIF (pas latest brut) pour les cas où la dernière
+      // année a un FCF négatif (small biotech, restructuring, etc.) : sinon pfcfTTM
+      // serait null alors qu'on a un multiple parfaitement calculable sur l'année N-1.
       const marketCap = (latestShares && price > 0)
         ? price * latestShares.value
         : null;
-      const pfcfTTM = (marketCap && latestFcf && latestFcf.value > 0)
-        ? marketCap / latestFcf.value
+      const pfcfTTM = (marketCap && latestPositiveFcf && latestPositiveFcf.value > 0)
+        ? marketCap / latestPositiveFcf.value
         : null;
 
       const metrics: DerivedMetrics = {

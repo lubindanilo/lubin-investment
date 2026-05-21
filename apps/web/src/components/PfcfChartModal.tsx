@@ -173,11 +173,15 @@ export function PfcfChartModal({ ticker, currentPfcf, annualOnly = false, onClos
 
             {stats && (
               <div className="pfcf-stats">
-                <Stat label="Actuel" value={`${stats.latest.toFixed(1)}×`} accent={stats.latest < stats.median ? 'green' : 'red'} />
+                <Stat
+                  label={annualOnly ? 'Dernière clôture annuelle' : 'Actuel'}
+                  value={`${stats.latest.toFixed(1)}×`}
+                  accent={stats.latest < stats.median ? 'green' : 'red'}
+                />
                 <Stat label="Médiane période" value={`${stats.median.toFixed(1)}×`} />
                 <Stat label="Min / Max" value={`${stats.min.toFixed(1)}× / ${stats.max.toFixed(1)}×`} />
                 <Stat
-                  label="Percentile actuel"
+                  label="Percentile"
                   value={`${stats.percentile.toFixed(0)}e`}
                   accent={stats.percentile < 30 ? 'green' : stats.percentile > 70 ? 'red' : undefined}
                 />
@@ -187,9 +191,15 @@ export function PfcfChartModal({ ticker, currentPfcf, annualOnly = false, onClos
 
             {stats && (
               <div className="pfcf-help">
+                {annualOnly && currentPfcf != null && (
+                  <>
+                    <strong>P/FCF actuel : {currentPfcf.toFixed(1)}×</strong> (basé sur le prix d'aujourd'hui × actions ÷ dernier FCF annuel positif).
+                    La courbe ci-dessus se base sur les prix de fin d'exercice, donc le dernier point peut différer du multiple actuel si le cours a bougé depuis.<br/>
+                  </>
+                )}
                 {stats.latest < stats.median
-                  ? `Le multiple actuel (${stats.latest.toFixed(1)}×) est sous la médiane historique (${stats.median.toFixed(1)}×) — valorisation relative attractive.`
-                  : `Le multiple actuel (${stats.latest.toFixed(1)}×) est au-dessus de la médiane historique (${stats.median.toFixed(1)}×) — valorisation tendue vs son propre passé.`}
+                  ? `Le dernier multiple (${stats.latest.toFixed(1)}×) est sous la médiane historique (${stats.median.toFixed(1)}×) — valorisation relative attractive.`
+                  : `Le dernier multiple (${stats.latest.toFixed(1)}×) est au-dessus de la médiane historique (${stats.median.toFixed(1)}×) — valorisation tendue vs son propre passé.`}
               </div>
             )}
           </>
