@@ -15,9 +15,26 @@ export function computeDerivedMetrics(input: {
    * CAGR du FCF/action calculé directement depuis Yahoo (FCF total / shares split-adj).
    * Préféré à epsGrowth5Y Finnhub car (1) FCF est plus pertinent qu'EPS, (2) Finnhub peut
    * tarder à split-adjuster sur les tickers ayant splitté récemment. Null si Yahoo n'a pas
-   * suffisamment d'historique FCF pour ce ticker.
+   * suffisamment d'historique FCF pour ce ticker OU si une anomalie de donnée est détectée.
    */
   yahooFcfPerShareCagr?: number | null;
+  /** Raison spécifique quand yahooFcfPerShareCagr est null (anomalie, données manquantes…) */
+  yahooFcfPerShareCagrReason?: string;
+  /**
+   * Override pour la croissance CA 5Y, calculé par régression TTM sur quarterlies Finnhub.
+   * Préféré à `revenueGrowth5Y` de Finnhub (qui est endpoint-based, sensible aux outliers).
+   * Si null/undefined → on retombe sur revenueGrowth5Y avec sa raison.
+   */
+  revenueGrowthOverride?: number | null;
+  revenueGrowthOverrideReason?: string;
+  /** Raison quand yahooShareCagr est null (régression échoue ET Yahoo aussi) */
+  sharesGrowthReason?: string;
+  /**
+   * Tendance de la marge opérationnelle TTM par régression sur 5 ans. Positif = expansion,
+   * négatif = compression. Remplace l'ancien proxy boolean (margin_TTM > margin_5Y_mean).
+   */
+  opMarginTrend?: number | null;
+  opMarginTrendReason?: string;
 }): DerivedMetrics {
   const m = input.metric?.metric ?? {};
   const price = input.quote?.c ?? null;
@@ -33,17 +50,16 @@ export function computeDerivedMetrics(input: {
   const revenueShareGrowth5Y = pct('revenueShareGrowth5Y');
   const epsGrowth5Y = pct('epsGrowth5Y');
 
-  // FCF/share growth — priorité :
-  //   1. Yahoo direct (FCF total / shares split-adj) — la métrique exacte qu'on veut
-  //   2. Finnhub epsGrowth5Y — fallback (proxy EPS = FCF/share, ok à la louche sauf
-  //      après un split récent où Finnhub peut afficher un growth aberrant le temps
-  //      qu'il re-traite ses ratios)
-  let fcfPerShareCagr: number | null = null;
-  if (input.yahooFcfPerShareCagr != null && Number.isFinite(input.yahooFcfPerShareCagr)) {
-    fcfPerShareCagr = input.yahooFcfPerShareCagr;
-  } else if (epsGrowth5Y != null) {
-    fcfPerShareCagr = epsGrowth5Y;
-  }
+  // FCF/share growth — Yahoo direct UNIQUEMENT (FCF total / shares split-adj).
+  // Pas de fallback caché vers Finnhub epsGrowth5Y : ce proxy EPS est fundamentally
+  // cassé sur les sociétés ayant splité récemment ou eu une année EPS négative
+  // (cas AMZN avec son split 20:1 en 2022 + EPS négatif 2022 → epsGrowth5Y -52%/an aberrant).
+  // Si Yahoo ne peut pas calculer, on affiche "Non calculable" + la raison.
+  const fcfPerShareCagr: number | null = (input.yahooFcfPerShareCagr != null && Number.isFinite(input.yahooFcfPerShareCagr))
+    ? input.yahooFcfPerShareCagr
+    : null;
+  // L'argument epsGrowth5Y reste lu plus haut pour les logs/debug mais n'est plus utilisé.
+  void epsGrowth5Y;
 
   // Évolution nombre d'actions :
   //   1) Source brute Yahoo (priorité) — vrai CAGR depuis la série diluted shares
@@ -69,10 +85,19 @@ export function computeDerivedMetrics(input: {
     fcfMargin = pct('netProfitMargin5Y');
   }
 
-  // Operating leverage : marge opérationnelle TTM > 5Y moyenne
+  // Operating leverage : tendance de la marge op TTM par régression (au lieu du proxy
+  // margin_TTM vs margin_5Y_mean qui était sensible aux outliers).
+  //   - opMarginTrend > 0  → marges en expansion (pass)
+  //   - opMarginTrend < 0  → marges en compression (fail)
+  // Si null (pas assez de données), on retombe sur l'ancien proxy boolean comme dernier recours.
   const opTTM = val('operatingMarginTTM');
   const op5Y = val('operatingMargin5Y');
-  const operatingLeverage = opTTM != null && op5Y != null ? opTTM > op5Y : null;
+  let operatingLeverage: boolean | null = null;
+  if (input.opMarginTrend != null && Number.isFinite(input.opMarginTrend)) {
+    operatingLeverage = input.opMarginTrend > 0;
+  } else if (opTTM != null && op5Y != null) {
+    operatingLeverage = opTTM > op5Y;
+  }
 
   // Cash ROCE : proxy via roi5Y (true Cash ROCE = FCF/CE, indisponible en free tier)
   const cashROCE = pct('roi5Y') ?? pct('roiTtm');
@@ -97,9 +122,31 @@ export function computeDerivedMetrics(input: {
 
   const netMargin = pct('netProfitMarginTTM') ?? pct('netProfitMargin5Y');
 
+  // revenueCagr : préfère le calcul par régression TTM (input.revenueGrowthOverride)
+  // sinon retombe sur le précomputed Finnhub revenueGrowth5Y (endpoint-based).
+  const revenueCagr: number | null = (input.revenueGrowthOverride != null && Number.isFinite(input.revenueGrowthOverride))
+    ? input.revenueGrowthOverride
+    : revenueGrowth5Y;
+
+  // Raisons "Non calculable" pour les ratios dérivés Finnhub
+  const reasons: Record<string, string> = {};
+  if (fcfPerShareCagr == null) {
+    reasons.fcfPerShareCagr = input.yahooFcfPerShareCagrReason ?? 'Historique insuffisant pour calculer FCF/action 5 ans';
+  }
+  if (revenueCagr == null) reasons.revenueCagr = input.revenueGrowthOverrideReason ?? 'Croissance CA 5Y indisponible';
+  if (shareCagr == null) reasons.shareCagr = input.sharesGrowthReason ?? 'Évolution actions 5Y indisponible';
+  if (netMargin == null) reasons.netMargin = 'Marge nette indisponible chez Finnhub';
+  if (fcfMargin == null) reasons.fcfMargin = 'Marge FCF non dérivable (P/FCF ou CA manquant)';
+  if (cashROCE == null) reasons.cashROCE = 'ROCE indisponible chez Finnhub';
+  if (netDebtFcf == null) reasons.netDebtFcf = 'Net debt / FCF non dérivable (EV ou FCF manquant)';
+  if (ccr == null) reasons.ccr = 'Cash Conversion Rate non dérivable (PE ou P/FCF manquant)';
+  if (operatingLeverage == null) reasons.operatingLeverage = input.opMarginTrendReason ?? 'Marges opérationnelles 5Y indisponibles';
+  if (pfcfTTM == null) reasons.pfcfTTM = 'P/FCF TTM indisponible chez Finnhub';
+  if (currentRatio == null) reasons.nwcCurrentRatio = 'Current ratio annuel indisponible';
+
   return {
     netMargin,
-    revenueCagr: revenueGrowth5Y,
+    revenueCagr,
     fcfPerShareCagr,
     shareCagr,
     shareCagrSource,
@@ -115,6 +162,7 @@ export function computeDerivedMetrics(input: {
     price,
     // SBC nécessite cash flow statement (FMP premium) → null en free tier
     sbcShareOfFcf: null,
+    notCalculableReasons: Object.keys(reasons).length > 0 ? reasons : undefined,
   };
 }
 

@@ -263,6 +263,156 @@ export async function getReportedTimeseries(
   return splitAdjustIfNeeded(filterWindow(points, cap), ticker, metric);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Croissance annualisée par régression log-linéaire (robuste aux outliers)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Principe général :
+//   1. Fetch les quarterlies
+//   2. Calcule un TTM rolling (somme 4Q pour flow, moyenne 4Q pour stock, ratio pour marges)
+//   3. Garde les TTM positifs sur la fenêtre (5Y par défaut)
+//   4. Régression linéaire de log(TTM) vs temps → slope = taux annualisé en log
+//   5. Renvoie exp(slope) - 1 = croissance annualisée
+//
+// Avantages :
+//   - Utilise TOUS les points (20+ TTM) pour estimer la pente, pas seulement les bornes
+//   - Robuste face à un quarter ou une année aberrante
+//   - Le TTM lisse la saisonnalité intra-année
+//
+// Helpers privés réutilisés par les 4 calculs :
+//   - rollingTtmSum     pour les flows (revenue, fcf, op income)
+//   - rollingTtmMean    pour les stocks (shares — point-in-time, moyenné sur 4Q = avg annuel)
+//   - regressLogGrowth  régression sur les points TTM
+
+interface TtmPoint { date: string; ts: number; value: number }
+
+function rollingTtmSum(points: TimeseriesPoint[]): TtmPoint[] {
+  const sorted = [...points].sort((a, b) => a.date.localeCompare(b.date));
+  const out: TtmPoint[] = [];
+  for (let i = 3; i < sorted.length; i++) {
+    const sum = sorted[i]!.value + sorted[i-1]!.value + sorted[i-2]!.value + sorted[i-3]!.value;
+    out.push({ date: sorted[i]!.date, ts: tsOf(sorted[i]!.date), value: sum });
+  }
+  return out;
+}
+
+function rollingTtmMean(points: TimeseriesPoint[]): TtmPoint[] {
+  return rollingTtmSum(points).map(p => ({ ...p, value: p.value / 4 }));
+}
+
+function tsOf(date: string): number {
+  return new Date(date + 'T00:00:00Z').getTime();
+}
+
+/**
+ * Régression linéaire de log(value) sur t (années depuis t0).
+ * Renvoie { rate, n, first, last } pour traçabilité. null si non régressable.
+ */
+function regressLogGrowth(points: TtmPoint[]): { rate: number; n: number; first: TtmPoint; last: TtmPoint } | null {
+  const valid = points.filter(p => p.value > 0);
+  if (valid.length < 4) return null;
+  const t0 = valid[0]!.ts;
+  const xs = valid.map(p => (p.ts - t0) / (365.25 * 24 * 3600 * 1000));
+  const ys = valid.map(p => Math.log(p.value));
+  const n = xs.length;
+  const meanX = xs.reduce((s, v) => s + v, 0) / n;
+  const meanY = ys.reduce((s, v) => s + v, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i]! - meanX) * (ys[i]! - meanY);
+    den += (xs[i]! - meanX) ** 2;
+  }
+  if (den === 0) return null;
+  return { rate: Math.exp(num / den) - 1, n, first: valid[0]!, last: valid[valid.length - 1]! };
+}
+
+/** Filtre une série de TTM points sur les `windowYears` dernières années (par ts). */
+function windowed(points: TtmPoint[], windowYears: number): TtmPoint[] {
+  const cutoff = Date.now() - windowYears * 365.25 * 24 * 3600 * 1000;
+  return points.filter(p => p.ts >= cutoff);
+}
+
+// ─── Croissance revenue 5 ans (TTM revenue + régression) ───────────────────
+
+export async function computeRevenueGrowthFromQuarterlies(
+  ticker: string,
+  windowYears = 5,
+): Promise<{ value: number | null; reason?: string }> {
+  const revQ = await getReportedTimeseries(ticker, 'revenue', 'quarterly', windowYears + 1);
+  if (revQ.length < 8) return { value: null, reason: `Moins de 8 trimestres revenue (${revQ.length})` };
+
+  const ttm = windowed(rollingTtmSum(revQ), windowYears);
+  if (ttm.length < 4) return { value: null, reason: 'Trop peu de TTM dans la fenêtre' };
+
+  const r = regressLogGrowth(ttm);
+  if (!r) return { value: null, reason: 'Régression non calculable (TTM ≤ 0 ?)' };
+  console.log(`[revGrowthRegress ${ticker}] ${r.n} TTM | ${r.first.date}(${(r.first.value/1e9).toFixed(1)}B) → ${r.last.date}(${(r.last.value/1e9).toFixed(1)}B) → ${(r.rate * 100).toFixed(2)}%/an`);
+  return { value: r.rate };
+}
+
+// ─── Évolution actions 5 ans (régression directe sur shares quarterly) ─────
+
+export async function computeSharesGrowthFromQuarterlies(
+  ticker: string,
+  windowYears = 5,
+): Promise<{ value: number | null; reason?: string }> {
+  // shares est non-cumulative (point-in-time). Pas besoin de TTM, on régresse direct.
+  // splitAdjustWithDiscontinuity dans getReportedTimeseries(metric='shares') gère déjà
+  // les splits, on a donc des shares en current-basis comparables d'un Q à l'autre.
+  const sharesQ = await getReportedTimeseries(ticker, 'shares', 'quarterly', windowYears + 1);
+  if (sharesQ.length < 8) return { value: null, reason: `Moins de 8 trimestres shares (${sharesQ.length})` };
+
+  // Convert TimeseriesPoint → TtmPoint format (juste pour réutiliser regressLogGrowth)
+  const points: TtmPoint[] = sharesQ
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(p => ({ date: p.date, ts: tsOf(p.date), value: p.value }));
+
+  const win = windowed(points, windowYears);
+  if (win.length < 4) return { value: null, reason: 'Trop peu de shares dans la fenêtre' };
+
+  const r = regressLogGrowth(win);
+  if (!r) return { value: null, reason: 'Régression non calculable' };
+  console.log(`[sharesGrowthRegress ${ticker}] ${r.n} pts | ${r.first.date}(${(r.first.value/1e6).toFixed(0)}M) → ${r.last.date}(${(r.last.value/1e6).toFixed(0)}M) → ${(r.rate * 100).toFixed(2)}%/an`);
+  return { value: r.rate };
+}
+
+// ─── Operating leverage (tendance TTM op margin) ───────────────────────────
+
+export async function computeOperatingMarginTrendFromQuarterlies(
+  ticker: string,
+  windowYears = 5,
+): Promise<{ value: number | null; reason?: string }> {
+  // Op margin TTM = TTM(opIncome) / TTM(revenue). On régresse log(margin) sur le temps,
+  // slope > 0 → marges en expansion (operating leverage positif).
+  const [opQ, revQ] = await Promise.all([
+    getReportedTimeseries(ticker, 'operatingIncome', 'quarterly', windowYears + 1),
+    getReportedTimeseries(ticker, 'revenue', 'quarterly', windowYears + 1),
+  ]);
+  if (opQ.length < 8 || revQ.length < 8) {
+    return { value: null, reason: `Moins de 8 trimestres pour op income (${opQ.length}) ou revenue (${revQ.length})` };
+  }
+
+  const opTtm = rollingTtmSum(opQ);
+  const revTtm = rollingTtmSum(revQ);
+  const revByDate = new Map(revTtm.map(p => [p.date, p.value]));
+
+  // Marge à chaque quarter où on a les 2 TTM
+  const marginTtm: TtmPoint[] = [];
+  for (const op of opTtm) {
+    const rev = revByDate.get(op.date);
+    if (rev == null || rev <= 0) continue;
+    marginTtm.push({ date: op.date, ts: op.ts, value: op.value / rev });
+  }
+
+  const win = windowed(marginTtm, windowYears);
+  if (win.length < 4) return { value: null, reason: 'Trop peu de marges TTM dans la fenêtre' };
+
+  const r = regressLogGrowth(win);
+  if (!r) return { value: null, reason: 'Régression non calculable (marge ≤ 0 ?)' };
+  console.log(`[opLeverageRegress ${ticker}] ${r.n} TTM | ${r.first.date}(${(r.first.value*100).toFixed(1)}%) → ${r.last.date}(${(r.last.value*100).toFixed(1)}%) → margin trend ${(r.rate * 100).toFixed(2)}%/an`);
+  return { value: r.rate };
+}
+
 /**
  * Calcule un taux de croissance annualisé du FCF/action sur ~5 ans par
  * régression log-linéaire des TTM trimestriels.
@@ -293,84 +443,38 @@ export async function computeFcfPerShareCagrFromQuarterlies(
   ticker: string,
   windowYears = 5,
 ): Promise<{ value: number | null; reason?: string }> {
-  // On fetch 6 ans pour avoir 24 quarters → 21 TTM possibles → 20 dans la fenêtre
   const [fcfQ, sharesQ] = await Promise.all([
     getReportedTimeseries(ticker, 'fcf', 'quarterly', windowYears + 1),
     getReportedTimeseries(ticker, 'shares', 'quarterly', windowYears + 1),
   ]);
   if (fcfQ.length < 8 || sharesQ.length < 8) {
-    return { value: null, reason: 'Moins de 8 trimestres disponibles (besoin >= 8 pour TTM rolling)' };
+    return { value: null, reason: 'Moins de 8 trimestres disponibles' };
   }
 
-  // Tri par date croissante
-  const fcf = [...fcfQ].sort((a, b) => a.date.localeCompare(b.date));
-  const shares = [...sharesQ].sort((a, b) => a.date.localeCompare(b.date));
+  // TTM FCF = sum 4Q. TTM shares = mean 4Q. Pour le matching shares vs Q4 dérivés
+  // de FCF (dates year-12-31 qui n'existent pas dans shares non-cumulative), on
+  // utilise un lookup at-or-before.
+  const fcfTtm = rollingTtmSum(fcfQ);
+  const sharesSorted = [...sharesQ].sort((a, b) => a.date.localeCompare(b.date));
+  const sharesAtOrBefore = (date: string): number | null => {
+    let c: number | null = null;
+    for (const p of sharesSorted) { if (p.date <= date) c = p.value; else break; }
+    return c;
+  };
 
-  // Lookup shares "à ou avant" une date donnée (les shares Q4 n'existent pas dans Finnhub
-  // car non-cumulative — pas de dérivation à partir du 10-K. Pour le FCF Q4 dérivé 2024-12-31
-  // on prend les shares de Q3 (2024-09-30) qui ne sont que à quelques % près des shares
-  // de fin d'année — l'erreur est négligeable vs un skip complet du Q4).
-  function sharesAtOrBefore(date: string): number | null {
-    let candidate: number | null = null;
-    for (const p of shares) {
-      if (p.date <= date) candidate = p.value;
-      else break;
-    }
-    return candidate;
+  const fcfPsTtm: TtmPoint[] = [];
+  for (const f of fcfTtm) {
+    const sh = sharesAtOrBefore(f.date);
+    if (sh == null || sh <= 0 || f.value <= 0) continue;
+    fcfPsTtm.push({ date: f.date, ts: f.ts, value: f.value / sh });
   }
+  const win = windowed(fcfPsTtm, windowYears);
+  if (win.length < 4) return { value: null, reason: `Trop peu de TTM positifs dans la fenêtre (${win.length})` };
 
-  // Compute TTM FCF/share at each quarter (commence à index 3 → besoin de 4 quarters de FCF)
-  const ttmSeries: Array<{ date: string; ts: number; ttmFcfPs: number }> = [];
-  for (let i = 3; i < fcf.length; i++) {
-    const ttmFcf = fcf[i]!.value + fcf[i - 1]!.value + fcf[i - 2]!.value + fcf[i - 3]!.value;
-    const sharesValues = [
-      sharesAtOrBefore(fcf[i]!.date),
-      sharesAtOrBefore(fcf[i - 1]!.date),
-      sharesAtOrBefore(fcf[i - 2]!.date),
-      sharesAtOrBefore(fcf[i - 3]!.date),
-    ].filter((v): v is number => typeof v === 'number' && v > 0);
-    if (sharesValues.length < 4) continue;
-    const ttmShares = sharesValues.reduce((s, v) => s + v, 0) / 4;
-    if (ttmShares <= 0 || ttmFcf <= 0) continue; // log impossible si ≤ 0
-    ttmSeries.push({
-      date: fcf[i]!.date,
-      ts: new Date(fcf[i]!.date + 'T00:00:00Z').getTime(),
-      ttmFcfPs: ttmFcf / ttmShares,
-    });
-  }
-
-  if (ttmSeries.length < 4) {
-    return { value: null, reason: `Moins de 4 TTM exploitables (FCF négatif ou shares manquant sur la fenêtre) — ${ttmSeries.length} dispo` };
-  }
-
-  // Filtre fenêtre : garde les TTM des `windowYears` dernières années
-  const cutoffTs = Date.now() - windowYears * 365.25 * 24 * 3600 * 1000;
-  const inWindow = ttmSeries.filter(p => p.ts >= cutoffTs);
-  if (inWindow.length < 4) {
-    return { value: null, reason: `Trop peu de TTM positifs dans la fenêtre ${windowYears}Y (${inWindow.length})` };
-  }
-
-  // Régression linéaire de log(ttmFcfPs) ~ années écoulées depuis le 1er point
-  const t0 = inWindow[0]!.ts;
-  const xs = inWindow.map(p => (p.ts - t0) / (365.25 * 24 * 3600 * 1000));
-  const ys = inWindow.map(p => Math.log(p.ttmFcfPs));
-  const n = xs.length;
-  const meanX = xs.reduce((s, v) => s + v, 0) / n;
-  const meanY = ys.reduce((s, v) => s + v, 0) / n;
-  let num = 0, den = 0;
-  for (let i = 0; i < n; i++) {
-    num += (xs[i]! - meanX) * (ys[i]! - meanY);
-    den += (xs[i]! - meanX) ** 2;
-  }
-  if (den === 0) return { value: null, reason: 'Variance nulle (tous les TTM à la même date)' };
-  const slope = num / den;
-  const annualGrowth = Math.exp(slope) - 1;
-
-  // Log debug pour traçabilité
-  const first = inWindow[0]!;
-  const last = inWindow[inWindow.length - 1]!;
-  console.log(`[fcfPsRegress ${ticker}] ${n} TTM | ${first.date}(${first.ttmFcfPs.toFixed(2)}) → ${last.date}(${last.ttmFcfPs.toFixed(2)}) | slope=${slope.toFixed(4)} → ${(annualGrowth * 100).toFixed(2)}%/an`);
-  return { value: annualGrowth };
+  const r = regressLogGrowth(win);
+  if (!r) return { value: null, reason: 'Régression non calculable' };
+  console.log(`[fcfPsRegress ${ticker}] ${r.n} TTM | ${r.first.date}(${r.first.value.toFixed(2)}) → ${r.last.date}(${r.last.value.toFixed(2)}) → ${(r.rate * 100).toFixed(2)}%/an`);
+  return { value: r.rate };
 }
 
 /**
