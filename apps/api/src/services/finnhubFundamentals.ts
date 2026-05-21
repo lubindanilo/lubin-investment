@@ -147,17 +147,42 @@ async function fetchReported(ticker: string, freq: Frequency): Promise<FinnhubFi
   });
 }
 
+/**
+ * Formule pure du Free Cash Flow brut (avant ajustement SBC).
+ *
+ * FCF = CFO − |CapEx|
+ *
+ * ⚠ CRITIQUE : Finnhub renvoie les concepts `us-gaap_PaymentsToAcquirePropertyPlantAndEquipment`
+ * en VALEUR ABSOLUE positive (= montant payé). Pas en signed cash flow négatif.
+ * On doit donc TOUJOURS soustraire la magnitude, jamais additionner.
+ *
+ * Bug historique (commit 1031836) : on faisait `cfo + capex` qui ADDITIONNAIT deux
+ * outflows → FCF doublé. AMZN passait de $7.7B réel à $271B factice. Tous les ratios
+ * dérivés étaient gonflés. Test ci-dessous pour anti-regression.
+ *
+ * Exporté pour tests unitaires.
+ */
+export function computeFcfBrut(cfo: number | null, capex: number | null): number | null {
+  if (cfo == null) return null;
+  return cfo - Math.abs(capex ?? 0);
+}
+
+/**
+ * Formule pure du FCF ajusté SBC.
+ * FCF_adj = CFO − |CapEx| − SBC
+ * (SBC est positif chez Finnhub, on soustrait pour annuler l'add-back non-cash dans CFO)
+ */
+export function computeFcfAdj(cfo: number | null, capex: number | null, sbc: number | null): number | null {
+  const brut = computeFcfBrut(cfo, capex);
+  if (brut == null) return null;
+  return brut - (sbc ?? 0);
+}
+
 function extractValue(filing: FinnhubFiling, cfg: MetricConfig): number | null {
   if (cfg.concepts.includes('__computed_fcf__')) {
     const cfo = extractFirst(filing, 'cf', METRICS.cfo!.concepts);
     const capex = extractFirst(filing, 'cf', METRICS.capex!.concepts);
-    if (cfo == null) return null;
-    // ⚠ CRITIQUE : Finnhub renvoie les concepts `us-gaap_PaymentsToAcquirePropertyPlantAndEquipment`
-    // en valeur ABSOLUE positive (= montant payé). Pas en signed cash flow négatif.
-    // FCF = CFO − |CapEx| (toujours soustraire la magnitude).
-    // Bug historique : on faisait `cfo + capex` qui DOUBLAIT le CFO (AMZN passait
-    // de $7.7B réel à $271B factice). Tous les ratios FCF étaient gonflés.
-    return cfo - Math.abs(capex ?? 0);
+    return computeFcfBrut(cfo, capex);
   }
   return extractFirst(filing, cfg.section, cfg.concepts);
 }
