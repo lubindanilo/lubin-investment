@@ -109,6 +109,21 @@ export const METRICS: Record<string, MetricConfig> = {
     ],
     cumulative: false, // moyenne pondérée → pas cumulative
   },
+  /**
+   * Stock-Based Compensation. Apparait dans le cash flow statement comme add-back
+   * non-cash (les boîtes l'ajoutent au CFO). On le soustrait pour calculer le "FCF
+   * ajusté SBC" qui reflète la vraie création de valeur économique (la SBC est une
+   * dilution réelle même si elle ne passe pas par le cash).
+   */
+  sbc: {
+    section: 'cf',
+    concepts: [
+      'us-gaap_ShareBasedCompensation',
+      'us-gaap_StockBasedCompensation',
+      'us-gaap_AllocatedShareBasedCompensationExpense',
+    ],
+    cumulative: true,
+  },
   totalDebt: {
     section: 'bs',
     concepts: [
@@ -137,8 +152,12 @@ function extractValue(filing: FinnhubFiling, cfg: MetricConfig): number | null {
     const cfo = extractFirst(filing, 'cf', METRICS.cfo!.concepts);
     const capex = extractFirst(filing, 'cf', METRICS.capex!.concepts);
     if (cfo == null) return null;
-    // CapEx est habituellement signé négatif dans les filings (paiements). FCF = CFO + CapEx.
-    return cfo + (capex ?? 0);
+    // ⚠ CRITIQUE : Finnhub renvoie les concepts `us-gaap_PaymentsToAcquirePropertyPlantAndEquipment`
+    // en valeur ABSOLUE positive (= montant payé). Pas en signed cash flow négatif.
+    // FCF = CFO − |CapEx| (toujours soustraire la magnitude).
+    // Bug historique : on faisait `cfo + capex` qui DOUBLAIT le CFO (AMZN passait
+    // de $7.7B réel à $271B factice). Tous les ratios FCF étaient gonflés.
+    return cfo - Math.abs(capex ?? 0);
   }
   return extractFirst(filing, cfg.section, cfg.concepts);
 }
@@ -332,6 +351,90 @@ function windowed(points: TtmPoint[], windowYears: number): TtmPoint[] {
   return points.filter(p => p.ts >= cutoff);
 }
 
+// ─── FCF ajusté SBC ─────────────────────────────────────────────────────────
+// FCF_adj = CFO − SBC + CapEx (CapEx déjà signé négatif). Pourquoi soustraire SBC :
+// elle est ajoutée au CFO comme add-back non-cash, ce qui INFLATE le CFO de la valeur
+// de la dilution. Pour mesurer la vraie création de valeur économique, on doit la
+// re-soustraire. Critique pour les tickers tech (META, GOOGL, AMZN avec $20B/an+).
+
+export interface AdjustedFcfResult {
+  /** TTM CFO − SBC + CapEx du dernier trimestre dispo. Null si données insuffisantes. */
+  ttmFcfAdj: number | null;
+  /** TTM CFO brut (pour debug + ratio SBC) */
+  ttmCfo: number | null;
+  /** TTM SBC */
+  ttmSbc: number | null;
+  /** TTM CapEx (signé négatif) */
+  ttmCapex: number | null;
+  /** Ratio SBC / FCF non ajusté — > 0.15 = alerte qualité FCF. Null si non calculable. */
+  sbcShareOfFcf: number | null;
+  /** Date du quarter le plus récent utilisé pour le TTM */
+  asOf: string | null;
+}
+
+export async function computeAdjustedFcfTtm(ticker: string): Promise<AdjustedFcfResult> {
+  const empty: AdjustedFcfResult = {
+    ttmFcfAdj: null, ttmCfo: null, ttmSbc: null, ttmCapex: null, sbcShareOfFcf: null, asOf: null,
+  };
+  const [cfoQ, capexQ, sbcQ] = await Promise.all([
+    getReportedTimeseries(ticker, 'cfo', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'capex', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'sbc', 'quarterly', 2),
+  ]);
+  if (cfoQ.length < 4 || capexQ.length < 4) return empty;
+
+  // TTM rolling sum sur les 4 derniers Q
+  const cfoTtm = rollingTtmSum(cfoQ);
+  const capexTtm = rollingTtmSum(capexQ);
+  const sbcTtm = sbcQ.length >= 4 ? rollingTtmSum(sbcQ) : [];
+
+  if (cfoTtm.length === 0 || capexTtm.length === 0) return empty;
+  // On prend le dernier TTM. Match par date (le plus récent commun à toutes les séries).
+  const lastCfo = cfoTtm[cfoTtm.length - 1]!;
+  const capexAtDate = capexTtm.find(c => c.date === lastCfo.date) ?? capexTtm[capexTtm.length - 1]!;
+  const sbcAtDate = sbcTtm.find(s => s.date === lastCfo.date) ?? sbcTtm[sbcTtm.length - 1];
+
+  const ttmCfo = lastCfo.value;
+  const ttmCapex = capexAtDate.value;
+  const ttmSbc = sbcAtDate?.value ?? null;
+  // CapEx est en valeur absolue chez Finnhub (cf commentaire dans extractValue) → toujours soustraire.
+  const rawFcf = ttmCfo - Math.abs(ttmCapex);
+  const ttmFcfAdj = ttmSbc != null ? rawFcf - ttmSbc : rawFcf; // si pas de SBC, FCF non ajusté
+  const sbcShareOfFcf = (ttmSbc != null && rawFcf > 0) ? ttmSbc / rawFcf : null;
+
+  return { ttmFcfAdj, ttmCfo, ttmSbc, ttmCapex, sbcShareOfFcf, asOf: lastCfo.date };
+}
+
+/**
+ * Variante TTM rolling SUR TOUTE la série quarterly : renvoie pour chaque trimestre
+ * un FCF_adj TTM. Utilisé par les régressions (FCF/action growth, etc.) qui ont besoin
+ * de l'historique complet, pas juste du dernier.
+ */
+async function getAdjustedFcfTtmSeries(ticker: string, windowYears: number): Promise<TtmPoint[]> {
+  const [cfoQ, capexQ, sbcQ] = await Promise.all([
+    getReportedTimeseries(ticker, 'cfo', 'quarterly', windowYears + 1),
+    getReportedTimeseries(ticker, 'capex', 'quarterly', windowYears + 1),
+    getReportedTimeseries(ticker, 'sbc', 'quarterly', windowYears + 1),
+  ]);
+  if (cfoQ.length < 4 || capexQ.length < 4) return [];
+
+  const cfoTtm = rollingTtmSum(cfoQ);
+  const capexTtm = rollingTtmSum(capexQ);
+  const sbcTtm = sbcQ.length >= 4 ? rollingTtmSum(sbcQ) : [];
+  const capexByDate = new Map(capexTtm.map(p => [p.date, p.value]));
+  const sbcByDate = new Map(sbcTtm.map(p => [p.date, p.value]));
+
+  const out: TtmPoint[] = [];
+  for (const p of cfoTtm) {
+    const capex = capexByDate.get(p.date);
+    if (capex == null) continue;
+    const sbc = sbcByDate.get(p.date) ?? 0; // si pas de SBC ce quarter, on assume 0 (boîte sans SBC)
+    // CapEx en valeur absolue chez Finnhub → toujours soustraire la magnitude.
+    out.push({ date: p.date, ts: p.ts, value: p.value - Math.abs(capex) - sbc });
+  }
+  return out;
+}
+
 // ─── Croissance revenue 5 ans (TTM revenue + régression) ───────────────────
 
 export async function computeRevenueGrowthFromQuarterlies(
@@ -443,18 +546,16 @@ export async function computeFcfPerShareCagrFromQuarterlies(
   ticker: string,
   windowYears = 5,
 ): Promise<{ value: number | null; reason?: string }> {
-  const [fcfQ, sharesQ] = await Promise.all([
-    getReportedTimeseries(ticker, 'fcf', 'quarterly', windowYears + 1),
+  // Utilise FCF_adj TTM (CFO − SBC + CapEx) au lieu du FCF brut.
+  // Cohérence avec le reste de l'app qui a switché sur FCF_adj.
+  const [fcfAdjTtm, sharesQ] = await Promise.all([
+    getAdjustedFcfTtmSeries(ticker, windowYears),
     getReportedTimeseries(ticker, 'shares', 'quarterly', windowYears + 1),
   ]);
-  if (fcfQ.length < 8 || sharesQ.length < 8) {
-    return { value: null, reason: 'Moins de 8 trimestres disponibles' };
+  if (fcfAdjTtm.length < 4 || sharesQ.length < 8) {
+    return { value: null, reason: 'Moins de 4 TTM FCF_adj ou 8 trimestres shares' };
   }
 
-  // TTM FCF = sum 4Q. TTM shares = mean 4Q. Pour le matching shares vs Q4 dérivés
-  // de FCF (dates year-12-31 qui n'existent pas dans shares non-cumulative), on
-  // utilise un lookup at-or-before.
-  const fcfTtm = rollingTtmSum(fcfQ);
   const sharesSorted = [...sharesQ].sort((a, b) => a.date.localeCompare(b.date));
   const sharesAtOrBefore = (date: string): number | null => {
     let c: number | null = null;
@@ -463,17 +564,19 @@ export async function computeFcfPerShareCagrFromQuarterlies(
   };
 
   const fcfPsTtm: TtmPoint[] = [];
-  for (const f of fcfTtm) {
+  for (const f of fcfAdjTtm) {
     const sh = sharesAtOrBefore(f.date);
     if (sh == null || sh <= 0 || f.value <= 0) continue;
     fcfPsTtm.push({ date: f.date, ts: f.ts, value: f.value / sh });
   }
   const win = windowed(fcfPsTtm, windowYears);
-  if (win.length < 4) return { value: null, reason: `Trop peu de TTM positifs dans la fenêtre (${win.length})` };
+  // Minimum 8 TTM positifs sinon la régression sur peu de points donne des résultats aberrants
+  // (cas AMZN dont le FCF_adj est négatif la moitié du temps → 4-6 pts résiduels → slope explosif).
+  if (win.length < 8) return { value: null, reason: `Trop peu de TTM FCF/action positifs (${win.length}/8 minimum) — FCF/action_adj souvent négatif sur la période` };
 
   const r = regressLogGrowth(win);
   if (!r) return { value: null, reason: 'Régression non calculable' };
-  console.log(`[fcfPsRegress ${ticker}] ${r.n} TTM | ${r.first.date}(${r.first.value.toFixed(2)}) → ${r.last.date}(${r.last.value.toFixed(2)}) → ${(r.rate * 100).toFixed(2)}%/an`);
+  console.log(`[fcfPsRegress ${ticker}] ${r.n} TTM (FCF_adj) | ${r.first.date}(${r.first.value.toFixed(2)}) → ${r.last.date}(${r.last.value.toFixed(2)}) → ${(r.rate * 100).toFixed(2)}%/an`);
   return { value: r.rate };
 }
 

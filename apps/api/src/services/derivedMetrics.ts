@@ -35,6 +35,14 @@ export function computeDerivedMetrics(input: {
    */
   opMarginTrend?: number | null;
   opMarginTrendReason?: string;
+  /**
+   * FCF ajusté SBC sur les 12 derniers mois (CFO_TTM − SBC_TTM + CapEx_TTM).
+   * Si fourni → utilisé pour pfcfTTM, fcfMargin, cashROCE, netDebtFcf, ccr.
+   * Sinon → on retombe sur les ratios précomputed Finnhub (FCF brut, non ajusté).
+   */
+  adjFcfTtm?: number | null;
+  /** SBC / FCF brut sur TTM (alerte qualité FCF si > 0.15) */
+  sbcShareOfFcf?: number | null;
 }): DerivedMetrics {
   const m = input.metric?.metric ?? {};
   const price = input.quote?.c ?? null;
@@ -75,14 +83,34 @@ export function computeDerivedMetrics(input: {
     shareCagrSource = 'finnhub-derived';
   }
 
-  // Marge FCF (proxy : price/pfcf ÷ revenuePerShareTTM)
-  const pfcfTTM = val('pfcfShareTTM');
+  // P/FCF actuel + Marge FCF — préfère le FCF ajusté SBC si dispo, sinon retombe sur
+  // les valeurs Finnhub précomputed (FCF brut, non ajusté).
+  //   pfcfTTM_adj = market_cap / FCF_adj_TTM
+  //   fcfMargin_adj = FCF_adj_TTM / revenue_TTM
+  const mcap = val('marketCapitalization');
   const rps = val('revenuePerShareTTM');
+  let pfcfTTM: number | null = null;
   let fcfMargin: number | null = null;
-  if (price != null && pfcfTTM != null && pfcfTTM > 0 && rps != null && rps > 0) {
-    fcfMargin = (price / pfcfTTM) / rps;
-  } else if (pct('netProfitMargin5Y') != null) {
-    fcfMargin = pct('netProfitMargin5Y');
+  if (input.adjFcfTtm != null && input.adjFcfTtm > 0 && mcap != null && mcap > 0) {
+    // Conversion : mcap est en millions USD chez Finnhub, FCF_adj est en USD bruts
+    const mcapAbsolute = mcap * 1_000_000;
+    pfcfTTM = mcapAbsolute / input.adjFcfTtm;
+    // Revenue TTM = revenuePerShareTTM × shares ; mcap / pfcf_brut = FCF brut
+    // mais on a déjà le revenu via rps : revenue = rps × shares_outstanding
+    // shares_outstanding ≈ mcap_abs / price
+    if (price != null && price > 0 && rps != null && rps > 0) {
+      const sharesAbs = mcapAbsolute / price;
+      const revenueAbs = rps * sharesAbs;
+      if (revenueAbs > 0) fcfMargin = input.adjFcfTtm / revenueAbs;
+    }
+  } else {
+    // Fallback : ratios Finnhub précomputed (FCF brut, non ajusté SBC)
+    pfcfTTM = val('pfcfShareTTM');
+    if (price != null && pfcfTTM != null && pfcfTTM > 0 && rps != null && rps > 0) {
+      fcfMargin = (price / pfcfTTM) / rps;
+    } else if (pct('netProfitMargin5Y') != null) {
+      fcfMargin = pct('netProfitMargin5Y');
+    }
   }
 
   // Operating leverage : tendance de la marge op TTM par régression (au lieu du proxy
@@ -99,22 +127,43 @@ export function computeDerivedMetrics(input: {
     operatingLeverage = opTTM > op5Y;
   }
 
-  // Cash ROCE : proxy via roi5Y (true Cash ROCE = FCF/CE, indisponible en free tier)
-  const cashROCE = pct('roi5Y') ?? pct('roiTtm');
-
-  // Net Debt / FCF : (EV - mcap) / FCF où FCF = mcap / pfcfTTM
-  const ev = val('enterpriseValue');
-  const mcap = val('marketCapitalization');
-  let netDebtFcf: number | null = null;
-  if (ev != null && mcap != null && pfcfTTM != null && pfcfTTM > 0) {
-    const fcfTotal = mcap / pfcfTTM;
-    if (fcfTotal > 0) netDebtFcf = (ev - mcap) / fcfTotal;
+  // Cash ROCE = FCF_adj / Capital Employé. Vrai Cash ROCE Buffett-style si on a FCF_adj.
+  // Capital Employed ≈ Enterprise Value (mcap + net debt) approximation Buffett courante,
+  // car on n'a pas les working capital details en free tier.
+  // Si FCF_adj indispo → fallback proxy Finnhub roi5Y (= NI / Capital Employed, moins fidèle).
+  const evForRoce = val('enterpriseValue');
+  let cashROCE: number | null;
+  if (input.adjFcfTtm != null && input.adjFcfTtm > 0 && evForRoce != null && evForRoce > 0) {
+    const evAbsolute = evForRoce * 1_000_000;
+    cashROCE = input.adjFcfTtm / evAbsolute;
+  } else {
+    cashROCE = pct('roi5Y') ?? pct('roiTtm');
   }
 
-  // Cash Conversion Rate : peTTM / pfcfShareTTM (proxy)
-  const peTTM = val('peTTM');
+  // Net Debt / FCF : (EV - mcap) / FCF_adj (si dispo) sinon FCF brut
+  const ev = val('enterpriseValue');
+  let netDebtFcf: number | null = null;
+  if (ev != null && mcap != null) {
+    const netDebtAbsolute = (ev - mcap) * 1_000_000; // EV et mcap en M$
+    const fcfToUse = input.adjFcfTtm ?? (pfcfTTM != null && pfcfTTM > 0 ? (mcap * 1_000_000) / pfcfTTM : null);
+    if (fcfToUse != null && fcfToUse > 0) {
+      netDebtFcf = netDebtAbsolute / fcfToUse;
+    }
+  }
+
+  // Cash Conversion Rate : FCF_adj / Net Income. Si FCF_adj indispo, fallback proxy peTTM/pfcfTTM
   let ccr: number | null = null;
-  if (peTTM != null && pfcfTTM != null && pfcfTTM > 0) ccr = peTTM / pfcfTTM;
+  if (input.adjFcfTtm != null && input.adjFcfTtm > 0) {
+    // Net Income TTM = mcap / peTTM (approximé)
+    const peTTM = val('peTTM');
+    if (peTTM != null && peTTM > 0 && mcap != null && mcap > 0) {
+      const netIncomeTtm = (mcap * 1_000_000) / peTTM;
+      if (netIncomeTtm > 0) ccr = input.adjFcfTtm / netIncomeTtm;
+    }
+  } else {
+    const peTTM = val('peTTM');
+    if (peTTM != null && pfcfTTM != null && pfcfTTM > 0) ccr = peTTM / pfcfTTM;
+  }
 
   // NWC : on a juste le current ratio annuel en free tier → on en déduit le signe
   const currentRatio = val('currentRatioAnnual');
@@ -160,8 +209,8 @@ export function computeDerivedMetrics(input: {
     pfcfTTM,
     marketCap: mcap,
     price,
-    // SBC nécessite cash flow statement (FMP premium) → null en free tier
-    sbcShareOfFcf: null,
+    // SBC / FCF brut — utile pour afficher un warning UI si > 15%
+    sbcShareOfFcf: input.sbcShareOfFcf ?? null,
     notCalculableReasons: Object.keys(reasons).length > 0 ? reasons : undefined,
   };
 }

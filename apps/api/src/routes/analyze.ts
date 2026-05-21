@@ -20,6 +20,7 @@ import {
   computeRevenueGrowthFromQuarterlies,
   computeSharesGrowthFromQuarterlies,
   computeOperatingMarginTrendFromQuarterlies,
+  computeAdjustedFcfTtm,
 } from '../services/finnhubFundamentals.js';
 import { resolveYahooTicker } from '../services/yahooResolve.js';
 import { getYahooFundamentals } from '../services/yahooFundamentals.js';
@@ -102,17 +103,19 @@ async function loadQuantData(ticker: string) {
 
   if (finnhubUsable) {
     fundamentalsSource = 'finnhub';
-    // 4 calculs en parallèle via régression log-linéaire sur TTM quarterly Finnhub :
-    //   - FCF/action 5Y (TTM_fcf / TTM_shares)
-    //   - Croissance CA 5Y (TTM_revenue)
-    //   - Évolution actions 5Y (régression directe sur shares quarterly split-adj)
+    // 5 calculs en parallèle via les quarterlies Finnhub :
+    //   - FCF/action 5Y (régression sur TTM FCF_adj / TTM_shares)
+    //   - Croissance CA 5Y (régression sur TTM_revenue)
+    //   - Évolution actions 5Y (régression sur shares quarterly split-adj)
     //   - Operating leverage (pente du TTM op margin)
-    // Robuste aux outliers (cf le bug -51.9% sur AMZN avec l'ancien endpoint-based).
-    const [fhFcfPs, fhRev, fhShares, fhOpLev] = await Promise.all([
+    //   - FCF_adj actuel (CFO_TTM − SBC_TTM + CapEx_TTM) → utilisé pour pfcfTTM, fcfMargin,
+    //     cashROCE, netDebtFcf, ccr — toute la chaîne FCF est désormais SBC-ajustée.
+    const [fhFcfPs, fhRev, fhShares, fhOpLev, fhFcfAdj] = await Promise.all([
       timed('fh fcfPs regress',  computeFcfPerShareCagrFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh rev regress',    computeRevenueGrowthFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh shares regress', computeSharesGrowthFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh opLev regress',  computeOperatingMarginTrendFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
+      timed('fh fcfAdj ttm',     computeAdjustedFcfTtm(ticker)).catch(() => ({ ttmFcfAdj: null as number | null, ttmCfo: null, ttmSbc: null, ttmCapex: null, sbcShareOfFcf: null, asOf: null })),
     ]);
 
     // FCF/action : fallback Yahoo si Finnhub quarterly KO (ADRs étrangers)
@@ -147,6 +150,10 @@ async function loadQuantData(ticker: string) {
       sharesGrowthReason: sharesCagrReason,
       opMarginTrend: fhOpLev.value,
       opMarginTrendReason: fhOpLev.reason,
+      // FCF_adj (TTM CFO − SBC + CapEx) — utilisé pour pfcfTTM, fcfMargin, cashROCE,
+      // netDebtFcf, ccr. Si null, on retombe sur les ratios précomputed Finnhub bruts.
+      adjFcfTtm: fhFcfAdj.ttmFcfAdj,
+      sbcShareOfFcf: fhFcfAdj.sbcShareOfFcf,
     });
   } else {
     console.log(`[analyze ${ticker}] Finnhub vide → fallback Yahoo`);
