@@ -45,6 +45,14 @@ export interface DerivedMetrics {
   price: number | null;
   /** Part du SBC sur le FCF — alerte si > 0.15 */
   sbcShareOfFcf: number | null;
+  /**
+   * Raisons spécifiques pour les ratios qui sont null. Permet au front d'afficher
+   * "Non calculable" + un message précis (ex: "FCF négatif sur le dernier exercice")
+   * plutôt qu'un vague "N/A" — principe d'honnêteté radicale, pas de fallback caché.
+   *
+   * Les clés correspondent aux champs DerivedMetrics, les valeurs sont les explications.
+   */
+  notCalculableReasons?: Partial<Record<string, string>>;
 }
 
 // ─── Valorisation (Buffett-style) ─────────────────────────────────────────

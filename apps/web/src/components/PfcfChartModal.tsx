@@ -191,12 +191,6 @@ export function PfcfChartModal({ ticker, currentPfcf, annualOnly = false, onClos
 
             {stats && (
               <div className="pfcf-help">
-                {annualOnly && currentPfcf != null && (
-                  <>
-                    <strong>P/FCF actuel : {currentPfcf.toFixed(1)}×</strong> (basé sur le prix d'aujourd'hui × actions ÷ dernier FCF annuel positif).
-                    La courbe ci-dessus se base sur les prix de fin d'exercice, donc le dernier point peut différer du multiple actuel si le cours a bougé depuis.<br/>
-                  </>
-                )}
                 {stats.latest < stats.median
                   ? `Le dernier multiple (${stats.latest.toFixed(1)}×) est sous la médiane historique (${stats.median.toFixed(1)}×) — valorisation relative attractive.`
                   : `Le dernier multiple (${stats.latest.toFixed(1)}×) est au-dessus de la médiane historique (${stats.median.toFixed(1)}×) — valorisation tendue vs son propre passé.`}

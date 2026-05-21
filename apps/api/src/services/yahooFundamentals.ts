@@ -169,21 +169,20 @@ export async function getYahooFundamentals(
       const latestRev = latest(revenue);
       const latestNI = latest(netIncome);
       const latestShares = latest(shares);
+      const latestFcf = latest(fcf);
 
-      // Pour le P/FCF et les ratios dérivés du FCF, on prend la dernière année avec FCF > 0.
-      // Pourquoi : Yahoo annual contient parfois une année récente avec FCF négatif (ex Cosmo
-      // Pharma 2025) qui rendrait pfcfTTM = null alors que l'année N-1 a un FCF positif
-      // significatif. Cohérence avec pfcfHistory.ts qui skip aussi les années FCF ≤ 0.
-      // Pour les autres ratios (netMargin, fcfMargin, currentRatio…) on garde "latest" brut.
-      const latestFcf = latest(fcf);                         // brut (peut être négatif)
-      const latestPositiveFcf = latest(fcf.filter(p => p.value > 0)); // pour pfcfTTM uniquement
+      // Raisons spécifiques quand un ratio est non-calculable. Principe : pas de fallback
+      // caché ("dernière année positive", "shares de l'année dernière"…). On dit honnêtement
+      // pourquoi on ne peut pas calculer.
+      const reasons: Record<string, string> = {};
 
       // ─── Calcul des ratios ────────────────────────────────────────────
 
       // Marge nette = NI / Revenue (latest)
-      const netMargin = (latestRev && latestNI && latestRev.value > 0)
-        ? latestNI.value / latestRev.value
-        : null;
+      let netMargin: number | null = null;
+      if (!latestRev || !latestNI) reasons.netMargin = 'Revenu ou résultat net indisponible';
+      else if (latestRev.value <= 0) reasons.netMargin = 'Chiffre d\'affaires nul ou négatif';
+      else netMargin = latestNI.value / latestRev.value;
 
       // Revenue CAGR 5Y
       const revenueCagr = cagr(revenue);
@@ -203,9 +202,10 @@ export async function getYahooFundamentals(
       const shareCagr = cagr(shares);
 
       // Marge FCF = FCF / Revenue (latest)
-      const fcfMargin = (latestRev && latestFcf && latestRev.value > 0)
-        ? latestFcf.value / latestRev.value
-        : null;
+      let fcfMargin: number | null = null;
+      if (!latestRev || !latestFcf) reasons.fcfMargin = 'FCF ou CA indisponible';
+      else if (latestRev.value <= 0) reasons.fcfMargin = 'Chiffre d\'affaires nul ou négatif';
+      else fcfMargin = latestFcf.value / latestRev.value;
 
       // Operating leverage : marge op TTM > marge op 5Y moyenne
       const opMarginNow = (latestRev && latestRev.value > 0)
@@ -216,25 +216,29 @@ export async function getYahooFundamentals(
       const opMarginAvg = avgMarginOver(operatingInc, revenue);
       const operatingLeverage = (opMarginNow != null && opMarginAvg != null) ? opMarginNow > opMarginAvg : null;
 
-      // Cash ROCE proxy : FCF / (Equity + LT Debt). FCF/CE strict nécessite IB capital (= NWC + PP&E),
-      // pas exposé directement par Yahoo. L'approximation Equity + Debt est l'usage Buffett courant.
+      // Cash ROCE proxy : FCF / (Equity + LT Debt). FCF/CE strict nécessite IB capital
+      // (NWC + PP&E), pas exposé directement par Yahoo. Approximation Equity + Debt = usage Buffett.
       const latestEquity = latest(equity);
       const latestDebt = latest(totalDebt);
-      const cashROCE = (latestFcf && latestEquity && latestDebt &&
-                       (latestEquity.value + latestDebt.value) > 0)
-        ? latestFcf.value / (latestEquity.value + latestDebt.value)
-        : null;
+      let cashROCE: number | null = null;
+      if (!latestFcf || !latestEquity || !latestDebt) reasons.cashROCE = 'FCF, capitaux propres ou dette indisponibles';
+      else if (latestFcf.value <= 0) reasons.cashROCE = 'FCF négatif sur le dernier exercice';
+      else if (latestEquity.value + latestDebt.value <= 0) reasons.cashROCE = 'Capital employé nul ou négatif';
+      else cashROCE = latestFcf.value / (latestEquity.value + latestDebt.value);
 
       // Dette nette / FCF
       const latestCash = latest(cash);
-      const netDebtFcf = (latestDebt && latestFcf && latestFcf.value > 0)
-        ? ((latestDebt.value - (latestCash?.value ?? 0)) / latestFcf.value)
-        : null;
+      let netDebtFcf: number | null = null;
+      if (!latestDebt || !latestFcf) reasons.netDebtFcf = 'Dette ou FCF indisponible';
+      else if (latestFcf.value <= 0) reasons.netDebtFcf = 'FCF négatif sur le dernier exercice';
+      else netDebtFcf = (latestDebt.value - (latestCash?.value ?? 0)) / latestFcf.value;
 
       // Cash Conversion Rate = FCF / Net Income (>1 si bonne qualité de bénéfices)
-      const ccr = (latestFcf && latestNI && latestNI.value > 0)
-        ? latestFcf.value / latestNI.value
-        : null;
+      let ccr: number | null = null;
+      if (!latestFcf || !latestNI) reasons.ccr = 'FCF ou résultat net indisponible';
+      else if (latestNI.value <= 0) reasons.ccr = 'Résultat net négatif';
+      else if (latestFcf.value <= 0) reasons.ccr = 'FCF négatif sur le dernier exercice';
+      else ccr = latestFcf.value / latestNI.value;
 
       // BFR : on expose le current ratio brut (Yahoo l'a)
       const latestCA = latest(currentAssets);
@@ -244,16 +248,17 @@ export async function getYahooFundamentals(
         : null;
       const nwc = currentRatio != null ? (currentRatio < 1 ? -1 : 1) : null;
 
-      // P/FCF TTM = market_cap / FCF. Yahoo donne shares latest, on a price → mcap.
-      // On utilise le dernier FCF POSITIF (pas latest brut) pour les cas où la dernière
-      // année a un FCF négatif (small biotech, restructuring, etc.) : sinon pfcfTTM
-      // serait null alors qu'on a un multiple parfaitement calculable sur l'année N-1.
-      const marketCap = (latestShares && price > 0)
-        ? price * latestShares.value
-        : null;
-      const pfcfTTM = (marketCap && latestPositiveFcf && latestPositiveFcf.value > 0)
-        ? marketCap / latestPositiveFcf.value
-        : null;
+      // P/FCF TTM = market_cap / FCF (dernier exercice, strict — pas de fallback).
+      let marketCap: number | null = null;
+      if (!latestShares) reasons.marketCap = 'Nombre d\'actions indisponible';
+      else if (price <= 0) reasons.marketCap = 'Prix actuel indisponible';
+      else marketCap = price * latestShares.value;
+
+      let pfcfTTM: number | null = null;
+      if (!marketCap) reasons.pfcfTTM = reasons.marketCap ?? 'Market cap non calculable';
+      else if (!latestFcf) reasons.pfcfTTM = 'FCF indisponible';
+      else if (latestFcf.value <= 0) reasons.pfcfTTM = 'FCF négatif sur le dernier exercice';
+      else pfcfTTM = marketCap / latestFcf.value;
 
       const metrics: DerivedMetrics = {
         netMargin,
@@ -272,6 +277,7 @@ export async function getYahooFundamentals(
         marketCap,
         price,
         sbcShareOfFcf: null, // pas dispo en free
+        notCalculableReasons: Object.keys(reasons).length > 0 ? reasons : undefined,
       };
 
       console.log(`[yahoo fund ${yahooSymbol}] OK (${currency}, ${revenue.length}Y revenue, ${fcf.length}Y FCF)`);

@@ -127,30 +127,44 @@ function fmtRaw(v: number | null, digits = 2): string {
   return v == null ? 'N/A' : v.toFixed(digits);
 }
 
+/**
+ * Format strict pour les valeurs non calculables. Au lieu de "N/A" générique,
+ * on affiche "Non calculable" et l'explication contient la raison spécifique
+ * (FCF négatif, données manquantes, etc.) — principe d'honnêteté radicale.
+ */
+const NOT_CALC = 'Non calculable';
+function reasonOr(m: DerivedMetrics, key: string, fallback: string): string {
+  return m.notCalculableReasons?.[key] ?? fallback;
+}
+
 export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
   return [
     {
       nom: 'Rentable (marge nette)',
-      valeur: fmtPct(m.netMargin),
+      valeur: m.netMargin == null ? NOT_CALC : fmtPct(m.netMargin),
       cible: '> 0 %',
       statut: m.netMargin == null ? 'warn' : m.netMargin > 0.05 ? 'pass' : m.netMargin > 0 ? 'warn' : 'fail',
       explication: m.netMargin == null
-        ? 'Donnée indisponible'
+        ? reasonOr(m, 'netMargin', 'Donnée indisponible')
         : m.netMargin > 0 ? `Entreprise rentable (${fmtPct(m.netMargin)})` : 'Pertes nettes',
     },
     {
       nom: 'Croissance du CA 5 ans',
-      valeur: fmtPct(m.revenueCagr, '%/an'),
+      valeur: m.revenueCagr == null ? NOT_CALC : fmtPct(m.revenueCagr, '%/an'),
       cible: '> 10 %/an',
       statut: m.revenueCagr == null ? 'warn' : m.revenueCagr > 0.10 ? 'pass' : m.revenueCagr > 0.05 ? 'warn' : 'fail',
-      explication: m.revenueCagr == null ? 'Donnée indisponible' : m.revenueCagr > 0.10 ? 'Croissance soutenue' : 'Croissance insuffisante',
+      explication: m.revenueCagr == null
+        ? reasonOr(m, 'revenueCagr', 'Historique CA insuffisant')
+        : m.revenueCagr > 0.10 ? 'Croissance soutenue' : 'Croissance insuffisante',
     },
     {
       nom: 'Croissance FCF/action 5 ans',
-      valeur: fmtPct(m.fcfPerShareCagr, '%/an'),
+      valeur: m.fcfPerShareCagr == null ? NOT_CALC : fmtPct(m.fcfPerShareCagr, '%/an'),
       cible: '> 10 %/an (ajusté SBC)',
       statut: m.fcfPerShareCagr == null ? 'warn' : m.fcfPerShareCagr > 0.10 ? 'pass' : m.fcfPerShareCagr > 0.05 ? 'warn' : 'fail',
-      explication: m.fcfPerShareCagr == null ? 'Donnée indisponible' : m.fcfPerShareCagr > 0.10 ? 'Création de valeur par action solide' : 'Création de valeur par action faible',
+      explication: m.fcfPerShareCagr == null
+        ? reasonOr(m, 'fcfPerShareCagr', 'Historique FCF/action insuffisant')
+        : m.fcfPerShareCagr > 0.10 ? 'Création de valeur par action solide' : 'Création de valeur par action faible',
     },
     (() => {
       const v = m.shareCagr;
@@ -178,32 +192,38 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
     })(),
     {
       nom: 'Marge FCF (ajustée SBC)',
-      valeur: fmtPct(m.fcfMargin),
+      valeur: m.fcfMargin == null ? NOT_CALC : fmtPct(m.fcfMargin),
       cible: '> 10 %',
       statut: m.fcfMargin == null ? 'warn' : m.fcfMargin > 0.10 ? 'pass' : m.fcfMargin > 0.05 ? 'warn' : 'fail',
-      explication: m.fcfMargin == null ? 'Donnée indisponible' : m.fcfMargin > 0.10 ? 'Marge FCF solide' : 'Marge FCF faible',
+      explication: m.fcfMargin == null
+        ? reasonOr(m, 'fcfMargin', 'Donnée indisponible')
+        : m.fcfMargin > 0.10 ? 'Marge FCF solide' : 'Marge FCF faible',
     },
     {
       nom: 'Operating leverage',
-      valeur: m.operatingLeverage == null ? 'N/A' : m.operatingLeverage ? '✓ Expansion' : '✗ Compression',
+      valeur: m.operatingLeverage == null ? NOT_CALC : m.operatingLeverage ? '✓ Expansion' : '✗ Compression',
       cible: 'Marge en expansion sur 5 ans',
       statut: m.operatingLeverage == null ? 'warn' : m.operatingLeverage ? 'pass' : 'fail',
-      explication: m.operatingLeverage == null ? 'Trajectoire indisponible' : m.operatingLeverage ? 'Revenus croissent plus vite que les coûts' : 'Coûts grandissent plus vite que les revenus',
+      explication: m.operatingLeverage == null
+        ? reasonOr(m, 'operatingLeverage', 'Trajectoire 5 ans indisponible')
+        : m.operatingLeverage ? 'Revenus croissent plus vite que les coûts' : 'Coûts grandissent plus vite que les revenus',
     },
     {
       nom: 'Cash ROCE',
-      valeur: fmtPct(m.cashROCE),
+      valeur: m.cashROCE == null ? NOT_CALC : fmtPct(m.cashROCE),
       cible: '> 15 % (FCF / Capital Employé)',
       statut: m.cashROCE == null ? 'warn' : m.cashROCE > 0.15 ? 'pass' : m.cashROCE > 0.10 ? 'warn' : 'fail',
-      explication: m.cashROCE == null ? 'Donnée indisponible' : m.cashROCE > 0.15 ? 'Excellent retour cash sur capital' : 'Retour sur capital insuffisant',
+      explication: m.cashROCE == null
+        ? reasonOr(m, 'cashROCE', 'Donnée indisponible')
+        : m.cashROCE > 0.15 ? 'Excellent retour cash sur capital' : 'Retour sur capital insuffisant',
     },
     {
       nom: 'Dette nette / FCF',
-      valeur: fmtRaw(m.netDebtFcf),
+      valeur: m.netDebtFcf == null ? NOT_CALC : fmtRaw(m.netDebtFcf),
       cible: '< 3 ans',
       statut: m.netDebtFcf == null ? 'warn' : m.netDebtFcf < 3 ? 'pass' : m.netDebtFcf < 5 ? 'warn' : 'fail',
       explication: m.netDebtFcf == null
-        ? 'Donnée indisponible'
+        ? reasonOr(m, 'netDebtFcf', 'Donnée indisponible')
         : m.netDebtFcf < 0
           ? 'Trésorerie nette positive'
           : m.netDebtFcf < 3
@@ -212,10 +232,12 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
     },
     {
       nom: 'Cash Conversion Rate',
-      valeur: fmtRaw(m.ccr),
+      valeur: m.ccr == null ? NOT_CALC : fmtRaw(m.ccr),
       cible: '> 1 (FCF / Net Income)',
       statut: m.ccr == null ? 'warn' : m.ccr > 1 ? 'pass' : m.ccr > 0.7 ? 'warn' : 'fail',
-      explication: m.ccr == null ? 'Donnée indisponible' : m.ccr > 1 ? 'Les bénéfices deviennent vraiment du cash' : 'Une partie des bénéfices ne se transforme pas en cash',
+      explication: m.ccr == null
+        ? reasonOr(m, 'ccr', 'Donnée indisponible')
+        : m.ccr > 1 ? 'Les bénéfices deviennent vraiment du cash' : 'Une partie des bénéfices ne se transforme pas en cash',
     },
     (() => {
       // Current ratio = Current Assets / Current Liabilities. Sa lecture :
@@ -223,9 +245,9 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
       //   1-1.5 → équilibre classique
       //   > 1.5 → beaucoup de capital immobilisé en stocks + créances clients
       const cr = m.nwcCurrentRatio;
-      const valeur = cr == null ? 'N/A' : cr.toFixed(2);
+      const valeur = cr == null ? NOT_CALC : cr.toFixed(2);
       let statut: 'pass' | 'warn' | 'fail' = 'warn';
-      let explication = 'Donnée indisponible';
+      let explication = reasonOr(m, 'nwcCurrentRatio', 'Bilan indisponible');
       if (cr != null) {
         if (cr < 1) {
           statut = 'pass';
@@ -248,10 +270,12 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
     })(),
     {
       nom: 'P/FCF actuel',
-      valeur: m.pfcfTTM == null ? 'N/A' : m.pfcfTTM.toFixed(1) + '×',
+      valeur: m.pfcfTTM == null ? NOT_CALC : m.pfcfTTM.toFixed(1) + '×',
       cible: '< 25',
       statut: m.pfcfTTM == null ? 'warn' : m.pfcfTTM < 25 ? 'pass' : m.pfcfTTM < 35 ? 'warn' : 'fail',
-      explication: m.pfcfTTM == null ? 'Donnée indisponible' : m.pfcfTTM < 25 ? `Multiple raisonnable (${m.pfcfTTM.toFixed(1)}× FCF)` : `Multiple tendu — ${m.pfcfTTM.toFixed(1)}× FCF`,
+      explication: m.pfcfTTM == null
+        ? reasonOr(m, 'pfcfTTM', 'P/FCF non calculable')
+        : m.pfcfTTM < 25 ? `Multiple raisonnable (${m.pfcfTTM.toFixed(1)}× FCF)` : `Multiple tendu — ${m.pfcfTTM.toFixed(1)}× FCF`,
     },
   ];
 }
