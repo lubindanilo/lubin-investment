@@ -14,7 +14,7 @@
  *   ✓ Évolution actions 5Y         = déjà fait dans yahoo.ts
  *   ✓ Marge FCF                    = FCF TTM / Revenue TTM
  *   ✓ Operating leverage           = op margin TTM > moy 5Y
- *   ✓ Cash ROCE (proxy)            = FCF / (Equity + LT Debt)
+ *   ✓ Cash ROCE Bettin/Mauboussin  = FCF / (Assets − CurLiab − Goodwill − ExcessCash)
  *   ✓ Dette nette / FCF            = (Total Debt - Cash) / TTM FCF
  *   ✓ Cash Conversion Rate         = FCF / Net Income
  *   ✗ BFR (current ratio annual)   = Current Assets / Current Liabilities (Yahoo l'a)
@@ -24,6 +24,7 @@
  */
 import { yahooLimiter } from '../lib/limiter.js';
 import { fetchSplitEvents, cumulativeSplitFactor } from './yahooSplits.js';
+import { computeExcessCash } from './finnhubFundamentals.js';
 import type { DerivedMetrics } from '@lubin/shared';
 
 const TIMESERIES_BASE = 'https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries';
@@ -129,15 +130,20 @@ export async function getYahooFundamentals(
 ): Promise<YahooFundamentalsResult | null> {
   return yahooLimiter.schedule(async () => {
     try {
-      // Batch : 1 seul appel Yahoo avec tous les types nécessaires
+      // Batch : 1 seul appel Yahoo avec tous les types nécessaires.
+      // - annualTotalAssets + annualCurrentLiabilities + annualGoodwill : pour Cash ROCE
+      //   Bettin/Mauboussin = FCF / (Assets − CurLiab − Goodwill)
+      // - annualCashAndShortTermInvestments : pour netDebt/FCF (debt ratio)
       const types = [
         'annualTotalRevenue',
         'annualNetIncome',
         'annualOperatingIncome',
         'annualFreeCashFlow',
         'annualTotalDebt',
+        'annualCashAndShortTermInvestments',
         'annualCashAndCashEquivalents',
-        'annualStockholdersEquity',
+        'annualTotalAssets',
+        'annualGoodwill',
         'annualCurrentAssets',
         'annualCurrentLiabilities',
         'annualDilutedAverageShares',
@@ -157,8 +163,11 @@ export async function getYahooFundamentals(
       const operatingInc   = extract(data, 'annualOperatingIncome');
       const fcf            = extract(data, 'annualFreeCashFlow');
       const totalDebt      = extract(data, 'annualTotalDebt');
-      const cash           = extract(data, 'annualCashAndCashEquivalents');
-      const equity         = extract(data, 'annualStockholdersEquity');
+      // Préférence : cash+STI agrégé. Fallback : cash seul si Yahoo ne fournit pas l'agrégé.
+      const cashStiAgg     = extract(data, 'annualCashAndShortTermInvestments');
+      const cash           = cashStiAgg.length > 0 ? cashStiAgg : extract(data, 'annualCashAndCashEquivalents');
+      const totalAssets    = extract(data, 'annualTotalAssets');
+      const goodwill       = extract(data, 'annualGoodwill');
       const currentAssets  = extract(data, 'annualCurrentAssets');
       const currentLiab    = extract(data, 'annualCurrentLiabilities');
       const sharesDilutedRaw = extract(data, 'annualDilutedAverageShares');
@@ -216,18 +225,44 @@ export async function getYahooFundamentals(
       const opMarginAvg = avgMarginOver(operatingInc, revenue);
       const operatingLeverage = (opMarginNow != null && opMarginAvg != null) ? opMarginNow > opMarginAvg : null;
 
-      // Cash ROCE proxy : FCF / (Equity + LT Debt). FCF/CE strict nécessite IB capital
-      // (NWC + PP&E), pas exposé directement par Yahoo. Approximation Equity + Debt = usage Buffett.
-      const latestEquity = latest(equity);
+      // Cash ROCE Bettin/Mauboussin :
+      //   FCF / (Total Assets − Current Liabilities − Goodwill − ExcessCash)
+      // où ExcessCash = max(0, cash − 2% × revenue). Cohérent avec le path US.
+      // - Current Liabilities exclues car free financing (suppliers, deferred revenue)
+      // - Goodwill exclu car non productif (prime d'acquisition)
+      // - ExcessCash exclu car non immobilisé dans les ops (dort en T-Bills)
+      const latestAssets = latest(totalAssets);
+      const latestCurLiab = latest(currentLiab);
+      const latestGoodwill = latest(goodwill);
       const latestDebt = latest(totalDebt);
-      let cashROCE: number | null = null;
-      if (!latestFcf || !latestEquity || !latestDebt) reasons.cashROCE = 'FCF, capitaux propres ou dette indisponibles';
-      else if (latestFcf.value <= 0) reasons.cashROCE = 'FCF négatif sur le dernier exercice';
-      else if (latestEquity.value + latestDebt.value <= 0) reasons.cashROCE = 'Capital employé nul ou négatif';
-      else cashROCE = latestFcf.value / (latestEquity.value + latestDebt.value);
-
-      // Dette nette / FCF
       const latestCash = latest(cash);
+      let cashROCE: number | null = null;
+      let cashROCEFormula: 'strict' | 'no-excess-fallback' | null = null;
+      if (!latestFcf) reasons.cashROCE = 'FCF indisponible';
+      else if (latestFcf.value <= 0) reasons.cashROCE = 'FCF négatif sur le dernier exercice';
+      else if (!latestAssets || !latestCurLiab) reasons.cashROCE = 'Total Assets ou Current Liabilities indisponibles';
+      else {
+        const goodwillVal = latestGoodwill?.value ?? 0;
+        const cashVal = latestCash?.value ?? 0;
+        const revVal = latestRev?.value ?? null;
+        const excess = computeExcessCash(cashVal, revVal);
+        const ceStrict = latestAssets.value - latestCurLiab.value - goodwillVal - excess;
+        if (ceStrict > 0) {
+          cashROCE = latestFcf.value / ceStrict;
+          cashROCEFormula = 'strict';
+        } else {
+          // Fallback : sans soustraction d'excess (cohérent avec le path Finnhub)
+          const ceNoExcess = latestAssets.value - latestCurLiab.value - goodwillVal;
+          if (ceNoExcess > 0) {
+            cashROCE = latestFcf.value / ceNoExcess;
+            cashROCEFormula = 'no-excess-fallback';
+          } else {
+            reasons.cashROCE = `Capital employé nul ou négatif même sans excess cash (assets ${(latestAssets.value / 1e9).toFixed(2)}B − curLiab ${(latestCurLiab.value / 1e9).toFixed(2)}B − goodwill ${(goodwillVal / 1e9).toFixed(2)}B) — sur-acquisition`;
+          }
+        }
+      }
+
+      // Dette nette / FCF (séparé du ROCE, garde sa formule classique)
       let netDebtFcf: number | null = null;
       if (!latestDebt || !latestFcf) reasons.netDebtFcf = 'Dette ou FCF indisponible';
       else if (latestFcf.value <= 0) reasons.netDebtFcf = 'FCF négatif sur le dernier exercice';
@@ -269,6 +304,7 @@ export async function getYahooFundamentals(
         fcfMargin,
         operatingLeverage,
         cashROCE,
+        cashROCEFormula,
         netDebtFcf,
         ccr,
         nwc,

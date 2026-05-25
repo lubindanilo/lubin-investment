@@ -1,0 +1,137 @@
+/* Clone du look pfcf — namespace croce-* pour découpler. */
+
+.croce-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: croce-fade-in 0.15s ease-out;
+}
+
+@keyframes croce-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.croce-modal {
+  background: #fff;
+  border-radius: 10px;
+  width: 100%;
+  max-width: 920px;
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 22px 26px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+}
+
+.croce-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.croce-ticker {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--brand);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+}
+
+.croce-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 4px 0 4px;
+}
+
+.croce-sub {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.croce-close {
+  background: none;
+  border: none;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--text3);
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+.croce-close:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+.croce-periods {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.croce-loading,
+.croce-error {
+  padding: 36px 0;
+  text-align: center;
+  color: var(--text2);
+  font-size: 13px;
+}
+.croce-error { color: var(--brand-dark); }
+
+.croce-chart-wrap {
+  margin: 8px 0 18px;
+  padding-top: 6px;
+}
+
+.croce-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.croce-stat {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.croce-stat-label {
+  font-size: 10px;
+  font-family: 'IBM Plex Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text3);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.croce-stat-val {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.croce-stat-val.green { color: var(--green); }
+.croce-stat-val.red   { color: var(--red); }
+
+.croce-help {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--bg2);
+  border-left: 3px solid var(--brand);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.5;
+}

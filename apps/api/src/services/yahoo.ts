@@ -210,34 +210,61 @@ export function computeSharesCagr(history: SharesHistoryPoint[] | null): number 
   return Math.pow(newest.dilutedShares / oldest.dilutedShares, 1 / years) - 1;
 }
 
+export interface FcfPerShareCagrResult {
+  /** CAGR calculé. Null si non calculable ou anomalie détectée. */
+  value: number | null;
+  /** Raison spécifique quand value=null. */
+  reason?: string;
+}
+
 /**
  * CAGR du FCF par action depuis l'historique Yahoo (split-adjusté).
- *
- * Pourquoi pas Finnhub epsGrowth5Y ? Parce que :
- *   1. EPS ≠ FCF/action (un revenu net peut être boosté par one-shots, le FCF non).
- *   2. Sur un ticker qui vient de splitter (ex BKNG 25:1 en avril 2026), Finnhub peut
- *      mettre quelques semaines à split-ajuster ses ratios → epsGrowth5Y devient fictif.
  *
  * On calcule directement : fcfPerShare(année) = fcf / dilutedShares
  *                          CAGR = (fcfPerShare_newest / fcfPerShare_oldest)^(1/years) - 1
  *
- * Renvoie null si :
- *   - moins de 2 points avec FCF + shares > 0
- *   - les bornes ont un FCF négatif (CAGR mathématiquement non-pertinent)
- *   - série trop courte (< 2 ans)
+ * Renvoie { value: null, reason: "..." } si :
+ *   - moins de 2 points avec FCF + shares > 0 → "Historique FCF insuffisant"
+ *   - les bornes ont un FCF négatif → "FCF négatif sur les bornes"
+ *   - série trop courte → "Période < 1 an"
+ *   - **dernière année anormalement basse** (drop > 60% vs médiane des 2-3 précédentes)
+ *     → "Données Yahoo Y dubieuses : FCF a/b/c…" — pas de fallback caché, on alerte.
  */
-export function computeFcfPerShareCagr(history: SharesHistoryPoint[] | null): number | null {
-  if (!history || history.length < 2) return null;
+export function computeFcfPerShareCagr(history: SharesHistoryPoint[] | null): FcfPerShareCagrResult {
+  if (!history || history.length < 2) {
+    return { value: null, reason: 'Historique FCF insuffisant' };
+  }
   const valid = history.filter(p => p.fcf != null && p.fcf > 0 && p.dilutedShares > 0);
-  if (valid.length < 2) return null;
+  if (valid.length < 2) {
+    return { value: null, reason: 'Moins de 2 années avec FCF > 0' };
+  }
+
+  // Détection d'anomalie sur le dernier point : si le FCF de l'année N est < 40% de
+  // la médiane des années N-3..N-1 valides, on suspecte une donnée partielle/preliminaire
+  // (cas AMZN 2025 où Yahoo a renvoyé 7.7B vs ~32B les années précédentes). On bloque
+  // au lieu d'inventer une CAGR aberrante (-51.9%/an).
+  if (valid.length >= 3) {
+    const last = valid[valid.length - 1]!;
+    const prev = valid.slice(-4, -1).map(p => p.fcf!).filter(Boolean).sort((a, b) => a - b);
+    const median = prev[Math.floor(prev.length / 2)];
+    if (median != null && last.fcf! < median * 0.4) {
+      return {
+        value: null,
+        reason: `Données Yahoo ${last.fiscalYear} suspectes (FCF ${(last.fcf! / 1e9).toFixed(1)}B vs médiane ${(median / 1e9).toFixed(1)}B sur les années précédentes — probable partial year)`,
+      };
+    }
+  }
+
   const oldest = valid[0]!;
   const newest = valid[valid.length - 1]!;
   const years = newest.fiscalYear - oldest.fiscalYear;
-  if (years < 1) return null;
+  if (years < 1) return { value: null, reason: 'Période < 1 an entre bornes valides' };
   const fcfPsOld = oldest.fcf! / oldest.dilutedShares;
   const fcfPsNew = newest.fcf! / newest.dilutedShares;
-  if (fcfPsOld <= 0 || fcfPsNew <= 0) return null;
-  return Math.pow(fcfPsNew / fcfPsOld, 1 / years) - 1;
+  if (fcfPsOld <= 0 || fcfPsNew <= 0) {
+    return { value: null, reason: 'FCF/action négatif sur une borne' };
+  }
+  return { value: Math.pow(fcfPsNew / fcfPsOld, 1 / years) - 1 };
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -21,6 +21,7 @@ import {
   computeSharesGrowthFromQuarterlies,
   computeOperatingMarginTrendFromQuarterlies,
   computeAdjustedFcfTtm,
+  computeCapitalEmployedSnapshot,
 } from '../services/finnhubFundamentals.js';
 import { resolveYahooTicker } from '../services/yahooResolve.js';
 import { getYahooFundamentals } from '../services/yahooFundamentals.js';
@@ -110,12 +111,13 @@ async function loadQuantData(ticker: string) {
     //   - Operating leverage (pente du TTM op margin)
     //   - FCF_adj actuel (CFO_TTM − SBC_TTM + CapEx_TTM) → utilisé pour pfcfTTM, fcfMargin,
     //     cashROCE, netDebtFcf, ccr — toute la chaîne FCF est désormais SBC-ajustée.
-    const [fhFcfPs, fhRev, fhShares, fhOpLev, fhFcfAdj] = await Promise.all([
+    const [fhFcfPs, fhRev, fhShares, fhOpLev, fhFcfAdj, fhCapEmp] = await Promise.all([
       timed('fh fcfPs regress',  computeFcfPerShareCagrFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh rev regress',    computeRevenueGrowthFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh shares regress', computeSharesGrowthFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh opLev regress',  computeOperatingMarginTrendFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh fcfAdj ttm',     computeAdjustedFcfTtm(ticker)).catch(() => ({ ttmFcfAdj: null as number | null, ttmCfo: null, ttmSbc: null, ttmCapex: null, sbcShareOfFcf: null, asOf: null })),
+      timed('fh capEmp',         computeCapitalEmployedSnapshot(ticker)).catch(() => ({ totalAssets: null as number | null, currentLiabilities: null as number | null, goodwill: null as number | null, totalCash: null as number | null, revenueTtm: null as number | null, excessCash: null as number | null, formulaUsed: null as 'strict' | 'no-excess-fallback' | null, capitalEmployed: null as number | null, asOf: null, reason: 'Erreur fetch capital employé' as string | undefined })),
     ]);
 
     // FCF/action : fallback Yahoo si Finnhub quarterly KO (ADRs étrangers)
@@ -154,6 +156,11 @@ async function loadQuantData(ticker: string) {
       // netDebtFcf, ccr. Si null, on retombe sur les ratios précomputed Finnhub bruts.
       adjFcfTtm: fhFcfAdj.ttmFcfAdj,
       sbcShareOfFcf: fhFcfAdj.sbcShareOfFcf,
+      // Capital employé Bettin/Mauboussin (snapshot dernier Q) → dénominateur Cash ROCE.
+      // formulaUsed = 'strict' (avec excess) ou 'no-excess-fallback' (sans, pour cash-rich).
+      capitalEmployed: fhCapEmp.capitalEmployed,
+      capitalEmployedReason: fhCapEmp.reason,
+      capitalEmployedFormula: fhCapEmp.formulaUsed,
     });
   } else {
     console.log(`[analyze ${ticker}] Finnhub vide → fallback Yahoo`);

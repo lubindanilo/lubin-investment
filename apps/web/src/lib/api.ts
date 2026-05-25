@@ -10,6 +10,7 @@ import type {
   DerivedMetrics,
   TimeseriesResponse,
   PfcfHistoryResponse,
+  CashRoceHistoryResponse,
   PublicUser,
 } from '@lubin/shared';
 import { captureException } from './sentry.js';
@@ -122,6 +123,10 @@ export const api = {
   pfcfHistory(ticker: string, years: number) {
     const q = new URLSearchParams({ ticker, years: String(years) });
     return safeRequest<PfcfHistoryResponse>(`/api/pfcf-history?${q}`);
+  },
+  cashRoceHistory(ticker: string, years: number) {
+    const q = new URLSearchParams({ ticker, years: String(years) });
+    return safeRequest<CashRoceHistoryResponse>(`/api/cash-roce-history?${q}`);
   },
   priceHistory(ticker: string, years: number, interval: '1d' | '1wk' | '1mo' = '1mo') {
     const q = new URLSearchParams({ ticker, years: String(years), interval });

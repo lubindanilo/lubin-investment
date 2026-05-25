@@ -46,9 +46,16 @@ describe('computeDerivedMetrics', () => {
     expect(m.price).toBe(415.27);
     expect(m.pfcfTTM).toBe(16.7);
     expect(m.revenueCagr).toBeCloseTo(0.2227, 4);
-    expect(m.fcfPerShareCagr).toBeCloseTo(0.317, 4);
+    // fcfPerShareCagr exige des données Yahoo (FCF + shares annuels). Si non fournies,
+    // null avec raison (le proxy epsGrowth5Y a été retiré car cassé sur splits + EPS négatif).
+    expect(m.fcfPerShareCagr).toBeNull();
+    expect(m.notCalculableReasons?.fcfPerShareCagr).toBeTruthy();
     expect(m.netMargin).toBeCloseTo(0.172, 4);
-    expect(m.cashROCE).toBeCloseTo(0.546, 4);
+    // Cash ROCE = adjFcfTtm / (equity + debt). Sans inputs → null + reason.
+    // Plus de fallback caché vers Finnhub roi5Y (qui était un proxy NI-based fundamentalement
+    // différent). Test dédié pour la nouvelle formule plus bas.
+    expect(m.cashROCE).toBeNull();
+    expect(m.notCalculableReasons?.cashROCE).toMatch(/FCF ajusté/i);
     expect(m.operatingLeverage).toBe(true);
     expect(m.nwc).toBe(-1);
     expect(m.netDebtFcf).toBeLessThan(0);
@@ -106,6 +113,80 @@ describe('computeDerivedMetrics', () => {
     expect(m.shareCagr).toBeNull();
     expect(m.shareCagrSource).toBeNull();
   });
+
+  describe('Cash ROCE (formule Bettin/Mauboussin FCF/(Assets−CurLiab−Goodwill))', () => {
+    it('calcule ROCE = adjFcfTtm / capitalEmployed quand les deux sont fournis', () => {
+      // FCF_adj = $5B, CE = Assets $50B − CurLiab $20B − Goodwill $5B = $25B
+      // Cash ROCE = 5 / 25 = 20%
+      const m = computeDerivedMetrics({
+        metric: { metric: {} },
+        profile: null, quote: null,
+        adjFcfTtm: 5_000_000_000,
+        capitalEmployed: 25_000_000_000,
+      });
+      expect(m.cashROCE).toBeCloseTo(0.20, 4);
+      expect(m.notCalculableReasons?.cashROCE).toBeUndefined();
+    });
+
+    it('renvoie null + reason quand adjFcfTtm manque (pas de fallback roi5Y)', () => {
+      const m = computeDerivedMetrics({
+        metric: { metric: { roi5Y: 30 } }, // ROI5Y existe mais ne doit PLUS être utilisé
+        profile: null, quote: null,
+        capitalEmployed: 25_000_000_000,
+      });
+      expect(m.cashROCE).toBeNull();
+      expect(m.notCalculableReasons?.cashROCE).toMatch(/FCF ajusté/i);
+    });
+
+    it('renvoie null + reason quand adjFcfTtm est négatif', () => {
+      const m = computeDerivedMetrics({
+        metric: { metric: {} },
+        profile: null, quote: null,
+        adjFcfTtm: -1_000_000_000,
+        capitalEmployed: 25_000_000_000,
+      });
+      expect(m.cashROCE).toBeNull();
+      expect(m.notCalculableReasons?.cashROCE).toMatch(/négatif/i);
+    });
+
+    it('renvoie null + reason quand capitalEmployed manque (propage la raison du caller)', () => {
+      const m = computeDerivedMetrics({
+        metric: { metric: {} },
+        profile: null, quote: null,
+        adjFcfTtm: 5_000_000_000,
+        capitalEmployed: null,
+        capitalEmployedReason: 'Total Assets indisponible chez Finnhub',
+      });
+      expect(m.cashROCE).toBeNull();
+      expect(m.notCalculableReasons?.cashROCE).toBe('Total Assets indisponible chez Finnhub');
+    });
+
+    it('cas BKNG (asset-light) : faible CE → ROCE élevé reste calculable', () => {
+      // BKNG approx : Assets $27.7B − CurLiab $19.8B − Goodwill $2.7B = $5.2B
+      // FCF_adj ≈ $8B → Cash ROCE ≈ 154% (reflète le modèle ultra asset-light)
+      const m = computeDerivedMetrics({
+        metric: { metric: {} },
+        profile: null, quote: null,
+        adjFcfTtm: 8_000_000_000,
+        capitalEmployed: 5_200_000_000,
+        capitalEmployedFormula: 'no-excess-fallback',
+      });
+      expect(m.cashROCE).toBeCloseTo(1.54, 2);
+      expect(m.cashROCEFormula).toBe('no-excess-fallback');
+    });
+
+    it('expose cashROCEFormula="strict" quand le snapshot a appliqué la formule complète', () => {
+      const m = computeDerivedMetrics({
+        metric: { metric: {} },
+        profile: null, quote: null,
+        adjFcfTtm: 110_000_000_000, // AAPL
+        capitalEmployed: 184_000_000_000,
+        capitalEmployedFormula: 'strict',
+      });
+      expect(m.cashROCE).toBeCloseTo(0.598, 2);
+      expect(m.cashROCEFormula).toBe('strict');
+    });
+  });
 });
 
 describe('buildQuantitativeCriteria', () => {
@@ -148,6 +229,7 @@ describe('buildQuantitativeCriteria', () => {
   });
 
   it('classifie Medpace en pass majoritaire (cas réel)', () => {
+    // MEDP TTM ~$500M FCF_adj sur ~$800M capital employé (equity + debt) → ROCE ~62%
     const m = computeDerivedMetrics({
       metric: {
         metric: {
@@ -168,10 +250,13 @@ describe('buildQuantitativeCriteria', () => {
       },
       profile: { name: 'Medpace' },
       quote: { c: 415.27, d: 0, dp: 0, h: 0, l: 0, pc: 0 },
+      // Pour que cashROCE soit calculable il faut fournir adjFcfTtm + capitalEmployed
+      adjFcfTtm: 500_000_000,
+      capitalEmployed: 800_000_000,
     });
     const criteres = buildQuantitativeCriteria(m);
     const passCount = criteres.filter(c => c.statut === 'pass').length;
-    expect(passCount).toBeGreaterThanOrEqual(9); // au moins 9/11 pour Medpace
+    expect(passCount).toBeGreaterThanOrEqual(8); // au moins 8/11 pour Medpace (margin perd 'warn' sans FCF Yahoo)
   });
 });
 

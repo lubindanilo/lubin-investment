@@ -3,6 +3,7 @@ import type { Criterion } from '@lubin/shared';
 import { CRITERION_HISTOGRAMS, CRITERION_LINECHARTS } from '@lubin/shared';
 import { HistogramModal } from './HistogramModal.js';
 import { PfcfChartModal } from './PfcfChartModal.js';
+import { CashRoceChartModal } from './CashRoceChartModal.js';
 import './CriterionCard.css';
 
 const BADGE_LABEL: Record<Criterion['statut'], string> = {
@@ -72,6 +73,14 @@ export function CriterionCard({ c, ticker, currency = 'USD', annualOnly = false 
         <PfcfChartModal
           ticker={ticker}
           currentPfcf={extractPfcfMultiple(c)}
+          annualOnly={annualOnly}
+          onClose={() => setOpen(false)}
+        />
+      )}
+
+      {open && ticker && chartKind === 'line' && lineConfig?.kind === 'cashRoce' && (
+        <CashRoceChartModal
+          ticker={ticker}
           annualOnly={annualOnly}
           onClose={() => setOpen(false)}
         />

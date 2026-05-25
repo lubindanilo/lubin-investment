@@ -43,6 +43,16 @@ export function computeDerivedMetrics(input: {
   adjFcfTtm?: number | null;
   /** SBC / FCF brut sur TTM (alerte qualité FCF si > 0.15) */
   sbcShareOfFcf?: number | null;
+  /**
+   * Capital employé Bettin/Mauboussin = Total Assets − Current Liabilities − Goodwill − Excess Cash.
+   * Snapshot du dernier quarter. Utilisé comme dénominateur du Cash ROCE.
+   * Null si données critiques manquent OU si CE ≤ 0 (sur-acquisition ou ultra-cash-rich).
+   */
+  capitalEmployed?: number | null;
+  /** Raison explicite quand capitalEmployed est null (equity négatif > debt, données manquantes…) */
+  capitalEmployedReason?: string;
+  /** Variante de formule effectivement appliquée par le snapshot — propagé tel quel à la sortie */
+  capitalEmployedFormula?: 'strict' | 'no-excess-fallback' | null;
 }): DerivedMetrics {
   const m = input.metric?.metric ?? {};
   const price = input.quote?.c ?? null;
@@ -127,17 +137,26 @@ export function computeDerivedMetrics(input: {
     operatingLeverage = opTTM > op5Y;
   }
 
-  // Cash ROCE = FCF_adj / Capital Employé. Vrai Cash ROCE Buffett-style si on a FCF_adj.
-  // Capital Employed ≈ Enterprise Value (mcap + net debt) approximation Buffett courante,
-  // car on n'a pas les working capital details en free tier.
-  // Si FCF_adj indispo → fallback proxy Finnhub roi5Y (= NI / Capital Employed, moins fidèle).
-  const evForRoce = val('enterpriseValue');
-  let cashROCE: number | null;
-  if (input.adjFcfTtm != null && input.adjFcfTtm > 0 && evForRoce != null && evForRoce > 0) {
-    const evAbsolute = evForRoce * 1_000_000;
-    cashROCE = input.adjFcfTtm / evAbsolute;
+  // Cash ROCE Bettin/Mauboussin : FCF_adj / (Assets − CurLiab − Goodwill − ExcessCash).
+  // Avec fallback explicite sur la formule sans excess cash pour les boîtes ultra-cash-rich
+  // (BKNG, MEDP) où l'excess cash dépasse le capital opérationnel net. Le caller (snapshot)
+  // a déjà choisi la formule à appliquer via `capitalEmployedFormula`.
+  let cashROCE: number | null = null;
+  let cashROCEReason: string | undefined;
+  const cashROCEFormula: 'strict' | 'no-excess-fallback' | null = input.capitalEmployedFormula ?? null;
+  if (input.adjFcfTtm == null || input.adjFcfTtm <= 0) {
+    cashROCEReason = input.adjFcfTtm == null
+      ? 'FCF ajusté TTM indisponible'
+      : 'FCF ajusté TTM négatif ou nul';
+  } else if (input.capitalEmployed == null) {
+    cashROCEReason = input.capitalEmployedReason ?? 'Capital employé indisponible';
   } else {
-    cashROCE = pct('roi5Y') ?? pct('roiTtm');
+    cashROCE = input.adjFcfTtm / input.capitalEmployed;
+    // Si fallback appliqué, on l'expose dans la "raison" même quand cashROCE est calculé
+    // (la carte UI affichera la formule réellement utilisée).
+    if (cashROCEFormula === 'no-excess-fallback' && input.capitalEmployedReason) {
+      cashROCEReason = input.capitalEmployedReason;
+    }
   }
 
   // Net Debt / FCF : (EV - mcap) / FCF_adj (si dispo) sinon FCF brut
@@ -186,7 +205,7 @@ export function computeDerivedMetrics(input: {
   if (shareCagr == null) reasons.shareCagr = input.sharesGrowthReason ?? 'Évolution actions 5Y indisponible';
   if (netMargin == null) reasons.netMargin = 'Marge nette indisponible chez Finnhub';
   if (fcfMargin == null) reasons.fcfMargin = 'Marge FCF non dérivable (P/FCF ou CA manquant)';
-  if (cashROCE == null) reasons.cashROCE = 'ROCE indisponible chez Finnhub';
+  if (cashROCE == null) reasons.cashROCE = cashROCEReason ?? 'ROCE non calculable (FCF ou capital employé manquant)';
   if (netDebtFcf == null) reasons.netDebtFcf = 'Net debt / FCF non dérivable (EV ou FCF manquant)';
   if (ccr == null) reasons.ccr = 'Cash Conversion Rate non dérivable (PE ou P/FCF manquant)';
   if (operatingLeverage == null) reasons.operatingLeverage = input.opMarginTrendReason ?? 'Marges opérationnelles 5Y indisponibles';
@@ -202,6 +221,7 @@ export function computeDerivedMetrics(input: {
     fcfMargin,
     operatingLeverage,
     cashROCE,
+    cashROCEFormula,
     netDebtFcf,
     ccr,
     nwc,
@@ -305,15 +325,27 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
         ? reasonOr(m, 'operatingLeverage', 'Trajectoire 5 ans indisponible')
         : m.operatingLeverage ? 'Revenus croissent plus vite que les coûts' : 'Coûts grandissent plus vite que les revenus',
     },
-    {
-      nom: 'Cash ROCE',
-      valeur: m.cashROCE == null ? NOT_CALC : fmtPct(m.cashROCE),
-      cible: '> 15 % (FCF / Capital Employé)',
-      statut: m.cashROCE == null ? 'warn' : m.cashROCE > 0.15 ? 'pass' : m.cashROCE > 0.10 ? 'warn' : 'fail',
-      explication: m.cashROCE == null
+    (() => {
+      // Le texte d'explication change selon la formule réellement appliquée :
+      //  - 'strict' : Damodaran complet (avec soustraction de l'excess cash)
+      //  - 'no-excess-fallback' : Bettin/Mauboussin classique (fallback pour ultra-cash-rich)
+      const variant = m.cashROCEFormula;
+      const strictFormula = 'FCF ajusté SBC ÷ (Assets − CurLiab − Goodwill − Cash excédentaire). Cash excédentaire = max(0, cash − 2 % × revenue)';
+      const fallbackFormula = 'FCF ajusté SBC ÷ (Assets − CurLiab − Goodwill). Fallback Bettin/Mauboussin classique car l\'excess cash dépassait le capital opérationnel net (boîte ultra-cash-rich)';
+      const formulaText = variant === 'no-excess-fallback' ? fallbackFormula : strictFormula;
+      const verdict = m.cashROCE == null
         ? reasonOr(m, 'cashROCE', 'Donnée indisponible')
-        : m.cashROCE > 0.15 ? 'Excellent retour cash sur capital' : 'Retour sur capital insuffisant',
-    },
+        : m.cashROCE > 0.15
+          ? `Excellent retour cash sur capital. Formule : ${formulaText}`
+          : `Retour sur capital insuffisant. Formule : ${formulaText}`;
+      return {
+        nom: 'Cash ROCE',
+        valeur: m.cashROCE == null ? NOT_CALC : fmtPct(m.cashROCE),
+        cible: '> 15 % (FCF ÷ Capital Investi)',
+        statut: m.cashROCE == null ? 'warn' : m.cashROCE > 0.15 ? 'pass' : m.cashROCE > 0.10 ? 'warn' : 'fail',
+        explication: verdict,
+      } as const;
+    })(),
     {
       nom: 'Dette nette / FCF',
       valeur: m.netDebtFcf == null ? NOT_CALC : fmtRaw(m.netDebtFcf),

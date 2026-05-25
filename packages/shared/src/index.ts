@@ -34,6 +34,14 @@ export interface DerivedMetrics {
   fcfMargin: number | null;
   operatingLeverage: boolean | null;
   cashROCE: number | null;
+  /**
+   * Indique quelle variante de la formule Cash ROCE a été appliquée :
+   *  - 'strict' : FCF / (Assets − CurLiab − Goodwill − ExcessCash) — formule complète Damodaran
+   *  - 'no-excess-fallback' : FCF / (Assets − CurLiab − Goodwill) — fallback pour boîtes
+   *    ultra-cash-rich (cash excédentaire > capital op net). Bettin/Mauboussin classique.
+   *  - null si cashROCE n'est pas calculable du tout
+   */
+  cashROCEFormula?: 'strict' | 'no-excess-fallback' | null;
   netDebtFcf: number | null;
   ccr: number | null;
   nwc: number | null;
@@ -223,7 +231,7 @@ export const PERIOD_YEARS: Record<TimeseriesPeriod, number> = {
  *
  * `metricKey` correspond à une clé du mapping METRICS dans `finnhubFundamentals.ts` côté API.
  */
-export type TimeseriesMetricKey = 'revenue' | 'netIncome' | 'operatingIncome' | 'fcf' | 'cfo' | 'shares' | 'totalDebt';
+export type TimeseriesMetricKey = 'revenue' | 'netIncome' | 'operatingIncome' | 'fcf' | 'cfo' | 'shares' | 'totalDebt' | 'equity' | 'cashAndEquivalents' | 'totalAssets' | 'currentLiabilities' | 'goodwill';
 
 export interface CriterionHistogram {
   metricKey: TimeseriesMetricKey;
@@ -234,11 +242,11 @@ export interface CriterionHistogram {
 
 /**
  * Liste des critères qui ouvrent un graphique LINE (≠ histogramme).
- * Pour le moment : juste P/FCF actuel, qui montre l'évolution du multiple dans le temps.
  * À étendre si on ajoute d'autres ratios trackables (PE, PB, EV/EBITDA, etc.).
  */
-export const CRITERION_LINECHARTS: Record<string, { label: string; kind: 'pfcf' }> = {
+export const CRITERION_LINECHARTS: Record<string, { label: string; kind: 'pfcf' | 'cashRoce' }> = {
   'P/FCF actuel': { label: 'Évolution du P/FCF dans le temps', kind: 'pfcf' },
+  'Cash ROCE':    { label: 'Évolution du Cash ROCE dans le temps', kind: 'cashRoce' },
 };
 
 export const CRITERION_HISTOGRAMS: Record<string, CriterionHistogram> = {
@@ -265,6 +273,24 @@ export interface PfcfHistoryResponse {
   ticker: string;
   years: number;
   points: PfcfHistoryPoint[];
+  cached: boolean;
+  ageMs?: number;
+  fetchedInMs?: number;
+}
+
+// ─── Cash ROCE historique (graphique line cliquable depuis le critère) ────
+
+export interface CashRoceHistoryPoint {
+  /** YYYY-MM-DD */
+  date: string;
+  /** Ratio Cash ROCE (ex 0.225 pour 22.5 %). Toujours > 0 — points dégénérés omis. */
+  cashRoce: number;
+}
+
+export interface CashRoceHistoryResponse {
+  ticker: string;
+  years: number;
+  points: CashRoceHistoryPoint[];
   cached: boolean;
   ageMs?: number;
   fetchedInMs?: number;

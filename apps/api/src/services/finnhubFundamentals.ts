@@ -124,13 +124,70 @@ export const METRICS: Record<string, MetricConfig> = {
     ],
     cumulative: true,
   },
+  /**
+   * Dette totale agrégée — calcule en sommant TOUTES les composantes du passif financier :
+   *   LT debt (current + non-current portions) + ST borrowings + leases (op + fin).
+   *
+   * Avant ce fix, on prenait le PREMIER concept qui matchait dans une liste, ce qui
+   * sous-estimait la dette pour les boîtes qui rapportent les composantes séparément
+   * (ex BKNG : on récupérait $15.4B au lieu de $19B). Voir __computed_totalDebt__
+   * dans extractValue pour la logique de somme + dédoublonnage.
+   */
   totalDebt: {
     section: 'bs',
+    concepts: ['__computed_totalDebt__'],
+    cumulative: false,
+  },
+  /**
+   * Cash + short-term investments — cash réellement mobilisable pour rembourser la
+   * dette. Soustrait du capital employé dans le Cash ROCE Buffett/Damodaran style.
+   * Voir __computed_cash__ dans extractValue.
+   */
+  cashAndEquivalents: {
+    section: 'bs',
+    concepts: ['__computed_cash__'],
+    cumulative: false,
+  },
+  /**
+   * Capitaux propres (Stockholders' Equity). Point-in-time, snapshot fin de période.
+   * Conservé même si plus utilisé pour Cash ROCE (formule désormais asset-based) —
+   * peut servir pour d'autres ratios (P/B, leverage, etc.).
+   */
+  equity: {
+    section: 'bs',
     concepts: [
-      'us-gaap_LongTermDebt',
-      'us-gaap_LongTermDebtNoncurrent',
-      'us-gaap_DebtCurrent',
+      'us-gaap_StockholdersEquity',
+      'us-gaap_StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
     ],
+    cumulative: false,
+  },
+  /**
+   * Total Assets — utilisé dans le dénominateur Bettin/Mauboussin du Cash ROCE :
+   *   CE = Total Assets − Current Liabilities − Goodwill
+   */
+  totalAssets: {
+    section: 'bs',
+    concepts: ['us-gaap_Assets'],
+    cumulative: false,
+  },
+  /**
+   * Current Liabilities — soustrait du capital employé car c'est du "free financing"
+   * (suppliers, deferred revenue, accruals…) qui ne demande pas de rémunération.
+   */
+  currentLiabilities: {
+    section: 'bs',
+    concepts: ['us-gaap_LiabilitiesCurrent'],
+    cumulative: false,
+  },
+  /**
+   * Goodwill — soustrait du capital employé. Les primes d'acquisitions traînent au
+   * bilan mais ne sont pas du capital productif. Permet de mesurer le retour sur le
+   * capital ORGANIQUE (vs acquisitif).
+   * Absent = 0 (la boîte n'a pas fait d'acquisitions significatives).
+   */
+  goodwill: {
+    section: 'bs',
+    concepts: ['us-gaap_Goodwill'],
     cumulative: false,
   },
 };
@@ -178,11 +235,131 @@ export function computeFcfAdj(cfo: number | null, capex: number | null, sbc: num
   return brut - (sbc ?? 0);
 }
 
+/**
+ * Dette totale = LT debt (current + non-current) + ST borrowings + leases (op + fin).
+ *
+ * Règle anti-double-count : `LongTermDebt` (l'agrégé) inclut déjà la portion courante,
+ * donc s'il est présent on l'utilise SEUL pour la LT debt. Sinon on somme les deux
+ * portions séparément.
+ *
+ * Renvoie null si AUCUN concept de dette n'est trouvé (boîte sans dette = 0 sera
+ * géré en aval dans getCapitalEmployedSeries qui interprète absence = 0).
+ *
+ * Exporté pour tests unitaires.
+ */
+export function computeTotalDebt(parts: {
+  longTermDebtAggregate: number | null;
+  longTermDebtNoncurrent: number | null;
+  longTermDebtCurrent: number | null;
+  shortTermBorrowings: number | null;
+  operatingLeaseNoncurrent: number | null;
+  operatingLeaseCurrent: number | null;
+  financeLeaseNoncurrent: number | null;
+  financeLeaseCurrent: number | null;
+}): number | null {
+  // LT debt : si l'agrégé est présent (rare mais arrive), il inclut déjà la portion courante.
+  // Sinon, somme des deux portions. Évite le double-count si certains tickers reportent les 3.
+  const ltDebt = parts.longTermDebtAggregate != null
+    ? parts.longTermDebtAggregate
+    : (parts.longTermDebtNoncurrent ?? 0) + (parts.longTermDebtCurrent ?? 0);
+  const stDebt = parts.shortTermBorrowings ?? 0;
+  const leases = (parts.operatingLeaseNoncurrent ?? 0)
+               + (parts.operatingLeaseCurrent ?? 0)
+               + (parts.financeLeaseNoncurrent ?? 0)
+               + (parts.financeLeaseCurrent ?? 0);
+  const total = ltDebt + stDebt + leases;
+  // Renvoie null SEULEMENT si aucune composante n'a été trouvée (vs renvoyer 0 qui
+  // pourrait masquer un défaut de parsing). 0 légitime ne survient pas en pratique :
+  // une boîte sans dette du tout omet TOUS ces concepts du filing XBRL.
+  const allMissing = parts.longTermDebtAggregate == null
+                  && parts.longTermDebtNoncurrent == null
+                  && parts.longTermDebtCurrent == null
+                  && parts.shortTermBorrowings == null
+                  && parts.operatingLeaseNoncurrent == null
+                  && parts.operatingLeaseCurrent == null
+                  && parts.financeLeaseNoncurrent == null
+                  && parts.financeLeaseCurrent == null;
+  return allMissing ? null : total;
+}
+
+/**
+ * Cash + équivalents + investissements court terme — la trésorerie réellement
+ * mobilisable pour rembourser la dette. Pour Damodaran-style net capital employed.
+ * Renvoie null si aucune composante trouvée.
+ *
+ * Exporté pour tests unitaires.
+ */
+export function computeCashAndEquivalents(parts: {
+  cash: number | null;
+  shortTermInvestments: number | null;
+}): number | null {
+  if (parts.cash == null && parts.shortTermInvestments == null) return null;
+  return (parts.cash ?? 0) + (parts.shortTermInvestments ?? 0);
+}
+
+/**
+ * Estime le cash EXCÉDENTAIRE (= non utilisé dans les opérations).
+ *
+ * Heuristique standard Damodaran/Mauboussin/McKinsey :
+ *   cash_opérationnel ≈ 2 % du revenue TTM (besoin pour rouler salaires, fournisseurs, etc.)
+ *   excess_cash = max(0, cash_total − operating_cash_need)
+ *
+ * À soustraire du capital employé pour mesurer le ROCE sur le capital VRAIMENT immobilisé
+ * dans les ops (vs cash qui dort en T-Bills et ne génère pas d'EBIT).
+ *
+ * Fallback conservateur : si revenue indisponible → renvoie 0 (pas d'excès supposé), pour
+ * éviter de slasher le dénominateur sur la base d'une hypothèse vide.
+ *
+ * Exporté pour tests unitaires.
+ */
+export const OPERATING_CASH_PCT_OF_REVENUE = 0.02;
+
+export function computeExcessCash(
+  totalCash: number | null,
+  revenueTtm: number | null,
+  operatingPct: number = OPERATING_CASH_PCT_OF_REVENUE,
+): number {
+  if (totalCash == null || totalCash <= 0) return 0;
+  if (revenueTtm == null || revenueTtm <= 0) return 0;
+  const operatingNeed = revenueTtm * operatingPct;
+  return Math.max(0, totalCash - operatingNeed);
+}
+
 function extractValue(filing: FinnhubFiling, cfg: MetricConfig): number | null {
   if (cfg.concepts.includes('__computed_fcf__')) {
     const cfo = extractFirst(filing, 'cf', METRICS.cfo!.concepts);
     const capex = extractFirst(filing, 'cf', METRICS.capex!.concepts);
     return computeFcfBrut(cfo, capex);
+  }
+  if (cfg.concepts.includes('__computed_totalDebt__')) {
+    return computeTotalDebt({
+      longTermDebtAggregate:    extractFirst(filing, 'bs', ['us-gaap_LongTermDebt']),
+      longTermDebtNoncurrent:   extractFirst(filing, 'bs', ['us-gaap_LongTermDebtNoncurrent']),
+      longTermDebtCurrent:      extractFirst(filing, 'bs', ['us-gaap_LongTermDebtCurrent']),
+      shortTermBorrowings:      extractFirst(filing, 'bs', [
+        'us-gaap_ShortTermBorrowings',
+        'us-gaap_NotesPayableCurrent',
+        'us-gaap_CommercialPaper',
+      ]),
+      operatingLeaseNoncurrent: extractFirst(filing, 'bs', ['us-gaap_OperatingLeaseLiabilityNoncurrent']),
+      operatingLeaseCurrent:    extractFirst(filing, 'bs', ['us-gaap_OperatingLeaseLiabilityCurrent']),
+      financeLeaseNoncurrent:   extractFirst(filing, 'bs', ['us-gaap_FinanceLeaseLiabilityNoncurrent']),
+      financeLeaseCurrent:      extractFirst(filing, 'bs', ['us-gaap_FinanceLeaseLiabilityCurrent']),
+    });
+  }
+  if (cfg.concepts.includes('__computed_cash__')) {
+    return computeCashAndEquivalents({
+      cash: extractFirst(filing, 'bs', [
+        'us-gaap_CashAndCashEquivalentsAtCarryingValue',
+        'us-gaap_CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
+        'us-gaap_Cash',
+      ]),
+      shortTermInvestments: extractFirst(filing, 'bs', [
+        'us-gaap_ShortTermInvestments',
+        'us-gaap_MarketableSecuritiesCurrent',
+        'us-gaap_AvailableForSaleSecuritiesCurrent',
+      ]),
+    });
   }
   return extractFirst(filing, cfg.section, cfg.concepts);
 }
@@ -397,6 +574,112 @@ export interface AdjustedFcfResult {
   asOf: string | null;
 }
 
+// ─── Capital Employé Bettin/Mauboussin (snapshot) ───────────────────────────
+// CE = Total Assets − Current Liabilities − Goodwill − Excess Cash
+//
+// Vision asset-based du capital qui doit être rémunéré :
+//   - On part des actifs totaux
+//   - On exclut les passifs courants = free financing (suppliers, deferred revenue)
+//   - On exclut le goodwill = primes d'acquisitions, pas du capital productif
+//   - On exclut le cash EXCÉDENTAIRE (>2% revenue) = cash qui dort en T-Bills,
+//     pas mobilisé dans les ops
+//
+// Cas dégénérés (→ "Non calculable", pas de fallback caché) :
+//   - Total Assets ou Current Liabilities indispo
+//   - CE ≤ 0 :
+//     · goodwill > capital productif (sur-acquisitions) OU
+//     · cash excédentaire > capital opérationnel restant (boîte ultra-cash-rich)
+//     → ratio non interprétable de toute façon
+
+export interface CapitalEmployedSnapshot {
+  totalAssets: number | null;
+  currentLiabilities: number | null;
+  goodwill: number | null;
+  /** Cash total (cash + STI) au dernier quarter */
+  totalCash: number | null;
+  /** Revenue TTM (somme des 4 derniers Q) — utilisé pour estimer le cash opérationnel */
+  revenueTtm: number | null;
+  /** Cash excédentaire théorique = max(0, totalCash − 2% × revenueTtm) */
+  excessCash: number | null;
+  /** Formule effectivement appliquée :
+   *  - 'strict' : CE = Assets − CurLiab − Goodwill − ExcessCash (formule complète)
+   *  - 'no-excess-fallback' : CE = Assets − CurLiab − Goodwill (la soustraction de l'excess
+   *    aurait rendu CE ≤ 0 → on retombe sur la formule classique Bettin/Mauboussin)
+   *  Null si CE indispo (impossible avec ou sans fallback). */
+  formulaUsed: 'strict' | 'no-excess-fallback' | null;
+  /** Capital employé final utilisé ; null si non calculable même avec fallback */
+  capitalEmployed: number | null;
+  /** Date du dernier quarter dispo */
+  asOf: string | null;
+  /** Raison explicite quand capitalEmployed est null */
+  reason?: string;
+}
+
+export async function computeCapitalEmployedSnapshot(ticker: string): Promise<CapitalEmployedSnapshot> {
+  const [assetsQ, curLiabQ, goodwillQ, cashQ, revenueQ] = await Promise.all([
+    getReportedTimeseries(ticker, 'totalAssets', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'currentLiabilities', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'goodwill', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'cashAndEquivalents', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'revenue', 'quarterly', 2),
+  ]);
+  const lastAssets = assetsQ[assetsQ.length - 1];
+  const lastCurLiab = curLiabQ[curLiabQ.length - 1];
+  const lastGoodwill = goodwillQ[goodwillQ.length - 1];
+  const lastCash = cashQ[cashQ.length - 1];
+  const totalAssets = lastAssets?.value ?? null;
+  const currentLiabilities = lastCurLiab?.value ?? null;
+  const goodwill = lastGoodwill?.value ?? 0;
+  const totalCash = lastCash?.value ?? 0;
+  const revenueSorted = [...revenueQ].sort((a, b) => a.date.localeCompare(b.date));
+  const last4Rev = revenueSorted.slice(-4);
+  const revenueTtm = last4Rev.length === 4 ? last4Rev.reduce((s, p) => s + p.value, 0) : null;
+  const excessCash = computeExcessCash(totalCash, revenueTtm);
+  const asOf = lastAssets?.date ?? lastCurLiab?.date ?? lastGoodwill?.date ?? null;
+
+  if (totalAssets == null) {
+    return {
+      totalAssets, currentLiabilities, goodwill: lastGoodwill?.value ?? null,
+      totalCash: lastCash?.value ?? null, revenueTtm, excessCash: null,
+      formulaUsed: null, capitalEmployed: null, asOf,
+      reason: 'Total Assets indisponible chez Finnhub',
+    };
+  }
+  if (currentLiabilities == null) {
+    return {
+      totalAssets, currentLiabilities, goodwill: lastGoodwill?.value ?? null,
+      totalCash: lastCash?.value ?? null, revenueTtm, excessCash: null,
+      formulaUsed: null, capitalEmployed: null, asOf,
+      reason: 'Current Liabilities indisponible chez Finnhub',
+    };
+  }
+  // Try strict formula first (Assets − CurLiab − Goodwill − ExcessCash)
+  const ceStrict = totalAssets - currentLiabilities - goodwill - excessCash;
+  if (ceStrict > 0) {
+    return {
+      totalAssets, currentLiabilities, goodwill, totalCash, revenueTtm, excessCash,
+      formulaUsed: 'strict', capitalEmployed: ceStrict, asOf,
+    };
+  }
+  // Strict CE négatif → fallback sur Bettin/Mauboussin classique (sans soustraction d'excess)
+  // Cas typique : boîte ultra-cash-rich (BKNG, MEDP, AAPL light) où le cash excédentaire
+  // > capital opérationnel. On expose le fallback explicitement (pas un fallback caché).
+  const ceNoExcess = totalAssets - currentLiabilities - goodwill;
+  if (ceNoExcess > 0) {
+    return {
+      totalAssets, currentLiabilities, goodwill, totalCash, revenueTtm, excessCash,
+      formulaUsed: 'no-excess-fallback', capitalEmployed: ceNoExcess, asOf,
+      reason: `Fallback : cash excédentaire (${(excessCash / 1e9).toFixed(2)}B) > capital opérationnel net — on retombe sur la formule sans soustraction d'excess (Bettin/Mauboussin classique)`,
+    };
+  }
+  // Même sans soustraire l'excess, CE ≤ 0 → sur-acquisition (goodwill > assets nets)
+  return {
+    totalAssets, currentLiabilities, goodwill, totalCash, revenueTtm, excessCash,
+    formulaUsed: null, capitalEmployed: null, asOf,
+    reason: `Capital employé nul ou négatif même sans excess cash (assets ${(totalAssets / 1e9).toFixed(2)}B − curLiab ${(currentLiabilities / 1e9).toFixed(2)}B − goodwill ${(goodwill / 1e9).toFixed(2)}B) — sur-acquisition`,
+  };
+}
+
 export async function computeAdjustedFcfTtm(ticker: string): Promise<AdjustedFcfResult> {
   const empty: AdjustedFcfResult = {
     ttmFcfAdj: null, ttmCfo: null, ttmSbc: null, ttmCapex: null, sbcShareOfFcf: null, asOf: null,
@@ -435,7 +718,7 @@ export async function computeAdjustedFcfTtm(ticker: string): Promise<AdjustedFcf
  * un FCF_adj TTM. Utilisé par les régressions (FCF/action growth, etc.) qui ont besoin
  * de l'historique complet, pas juste du dernier.
  */
-async function getAdjustedFcfTtmSeries(ticker: string, windowYears: number): Promise<TtmPoint[]> {
+export async function getAdjustedFcfTtmSeries(ticker: string, windowYears: number): Promise<TtmPoint[]> {
   const [cfoQ, capexQ, sbcQ] = await Promise.all([
     getReportedTimeseries(ticker, 'cfo', 'quarterly', windowYears + 1),
     getReportedTimeseries(ticker, 'capex', 'quarterly', windowYears + 1),
@@ -456,6 +739,57 @@ async function getAdjustedFcfTtmSeries(ticker: string, windowYears: number): Pro
     const sbc = sbcByDate.get(p.date) ?? 0; // si pas de SBC ce quarter, on assume 0 (boîte sans SBC)
     // CapEx en valeur absolue chez Finnhub → toujours soustraire la magnitude.
     out.push({ date: p.date, ts: p.ts, value: p.value - Math.abs(capex) - sbc });
+  }
+  return out;
+}
+
+/**
+ * Série quarterly du capital employé Bettin/Mauboussin =
+ *   Assets(t) − CurLiab(t) − Goodwill(t) − ExcessCash(t)
+ *
+ * où ExcessCash(t) = max(0, cash(t) − 2% × revenueTTM(t)). Point-in-time, pas TTM
+ * sur le CE lui-même (les éléments du bilan sont des snapshots), seul le revenue est
+ * roulé en TTM pour estimer le besoin opérationnel.
+ *
+ * - Absence de goodwill / cash / revenue sur un quarter = 0 (XBRL omet les concepts vides
+ *   ou pas assez de Q pour le TTM revenue → conservateur : pas d'excess soustrait)
+ * - Absence de assets ou curLiab = quarter skippé
+ * - CE ≤ 0 → quarter skippé
+ */
+export async function getCapitalEmployedSeries(ticker: string, windowYears: number): Promise<TimeseriesPoint[]> {
+  const [assetsQ, curLiabQ, goodwillQ, cashQ, revenueQ] = await Promise.all([
+    getReportedTimeseries(ticker, 'totalAssets', 'quarterly', windowYears + 1),
+    getReportedTimeseries(ticker, 'currentLiabilities', 'quarterly', windowYears + 1),
+    getReportedTimeseries(ticker, 'goodwill', 'quarterly', windowYears + 1),
+    getReportedTimeseries(ticker, 'cashAndEquivalents', 'quarterly', windowYears + 1),
+    getReportedTimeseries(ticker, 'revenue', 'quarterly', windowYears + 1),
+  ]);
+  if (assetsQ.length === 0 || curLiabQ.length === 0) return [];
+  const curLiabByDate = new Map(curLiabQ.map(p => [p.date, p.value]));
+  const goodwillByDate = new Map(goodwillQ.map(p => [p.date, p.value]));
+  const cashByDate = new Map(cashQ.map(p => [p.date, p.value]));
+  const revenueTtmSeries = rollingTtmSum(revenueQ);
+  const revenueTtmByDate = new Map(revenueTtmSeries.map(p => [p.date, p.value]));
+  const out: TimeseriesPoint[] = [];
+  for (const p of assetsQ) {
+    const curLiab = curLiabByDate.get(p.date);
+    if (curLiab == null) continue;
+    const goodwill = goodwillByDate.get(p.date) ?? 0;
+    const cash = cashByDate.get(p.date) ?? 0;
+    const revTtm = revenueTtmByDate.get(p.date) ?? null;
+    const excess = computeExcessCash(cash, revTtm);
+    // Strict d'abord (Bettin + soustraction excess Damodaran)
+    const ceStrict = p.value - curLiab - goodwill - excess;
+    if (ceStrict > 0) {
+      out.push({ date: p.date, value: ceStrict });
+      continue;
+    }
+    // Fallback : sans soustraction d'excess (cohérent avec le snapshot)
+    const ceNoExcess = p.value - curLiab - goodwill;
+    if (ceNoExcess > 0) {
+      out.push({ date: p.date, value: ceNoExcess });
+    }
+    // Sinon : sur-acquisition, on skip ce point
   }
   return out;
 }

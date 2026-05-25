@@ -56,7 +56,7 @@ describe('computeFcfPerShareCagr', () => {
       { fiscalYear: 2020, dilutedShares: 100, fcf: null },
       { fiscalYear: 2021, dilutedShares: 100, fcf: null },
     ];
-    expect(computeFcfPerShareCagr(history)).toBeNull();
+    expect(computeFcfPerShareCagr(history).value).toBeNull();
   });
 
   it('renvoie null si moins de 2 points exploitables', () => {
@@ -64,7 +64,7 @@ describe('computeFcfPerShareCagr', () => {
       { fiscalYear: 2020, dilutedShares: 100, fcf: 1000 },
       { fiscalYear: 2021, dilutedShares: 100, fcf: null }, // pas de FCF cette année
     ];
-    expect(computeFcfPerShareCagr(history)).toBeNull();
+    expect(computeFcfPerShareCagr(history).value).toBeNull();
   });
 
   it("renvoie null si FCF négatif sur les bornes (CAGR pas pertinent)", () => {
@@ -72,7 +72,7 @@ describe('computeFcfPerShareCagr', () => {
       { fiscalYear: 2020, dilutedShares: 100, fcf: -50 },
       { fiscalYear: 2024, dilutedShares: 100, fcf: 200 },
     ];
-    expect(computeFcfPerShareCagr(history)).toBeNull();
+    expect(computeFcfPerShareCagr(history).value).toBeNull();
   });
 
   it('calcule un CAGR positif quand FCF/action augmente', () => {
@@ -80,7 +80,7 @@ describe('computeFcfPerShareCagr', () => {
       { fiscalYear: 2020, dilutedShares: 100, fcf: 1000 },   // 10 $/action
       { fiscalYear: 2024, dilutedShares: 100, fcf: 1600 },   // 16 $/action
     ];
-    const cagr = computeFcfPerShareCagr(history);
+    const cagr = computeFcfPerShareCagr(history).value!;
     // (16/10)^(1/4) - 1 ≈ 0.1247
     expect(cagr).toBeCloseTo(0.1247, 3);
   });
@@ -91,9 +91,24 @@ describe('computeFcfPerShareCagr', () => {
       { fiscalYear: 2020, dilutedShares: 41_000_000, fcf: 2_400_000_000 },  // 58.5 $/action
       { fiscalYear: 2025, dilutedShares: 33_000_000, fcf: 8_000_000_000 },  // 242.4 $/action
     ];
-    const cagr = computeFcfPerShareCagr(history);
+    const cagr = computeFcfPerShareCagr(history).value!;
     // (242.4/58.5)^(1/5) - 1 ≈ 0.327 → +32.7%/an
     expect(cagr).toBeGreaterThan(0.30);
     expect(cagr).toBeLessThan(0.35);
+  });
+
+  it('détecte une anomalie de donnée Yahoo (dernier FCF anormalement bas)', () => {
+    // Cas AMZN 2025 : 3 ans à ~$32B puis Yahoo renvoie $7.70B la dernière année.
+    // C'est ~24% de la médiane → anomalie probable (partial year), bloque le calcul.
+    const history: SharesHistoryPoint[] = [
+      { fiscalYear: 2022, dilutedShares: 10_190_000_000, fcf: 30_000_000_000 },
+      { fiscalYear: 2023, dilutedShares: 10_490_000_000, fcf: 32_220_000_000 },
+      { fiscalYear: 2024, dilutedShares: 10_720_000_000, fcf: 32_880_000_000 },
+      { fiscalYear: 2025, dilutedShares: 10_830_000_000, fcf: 7_700_000_000 },  // ← anomalie
+    ];
+    const r = computeFcfPerShareCagr(history);
+    expect(r.value).toBeNull();
+    expect(r.reason).toMatch(/2025/);
+    expect(r.reason).toMatch(/suspect/i);
   });
 });
