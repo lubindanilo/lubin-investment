@@ -194,7 +194,32 @@ export const METRICS: Record<string, MetricConfig> = {
 
 export type MetricKey = keyof typeof METRICS;
 
-async function fetchReported(ticker: string, freq: Frequency): Promise<FinnhubFiling[]> {
+/**
+ * Tickers liés par un changement de nom : Finnhub conserve les filings sous le
+ * SYMBOLE déposé au moment du filing. Quand une boîte rebrand (Fiserv FISV→FI,
+ * Meta FB→META, Square SQ→XYZ, Twitter TWTR→X), les quarters récents arrivent
+ * sous le nouveau ticker tandis que les vieux restent sous l'ancien. Si on query
+ * un seul, on rate la moitié de l'historique → bug constaté sur FISV (1 quarter
+ * récent isolé sans contexte TTM).
+ *
+ * On fetch les deux et on merge dedupé par date. Bidirectionnel par construction :
+ * query 'FISV' ou 'FI' → mêmes données combinées.
+ */
+const TICKER_ALIASES: Record<string, string[]> = {
+  FISV: ['FI'],
+  FI:   ['FISV'],
+  FB:   ['META'],
+  META: ['FB'],
+  SQ:   ['XYZ'],
+  XYZ:  ['SQ'],
+  TWTR: ['X'],
+  X:    ['TWTR'],
+  TWX:  ['T'],
+  GOOG: ['GOOGL'],  // dual-class : généralement les mêmes filings mais on merge par sécurité
+  GOOGL: ['GOOG'],
+};
+
+async function fetchReportedSingle(ticker: string, freq: Frequency): Promise<FinnhubFiling[]> {
   return finnhubLimiter.schedule(async () => {
     const url = `${BASE}/stock/financials-reported?symbol=${ticker}&freq=${freq}&token=${TOKEN}`;
     const r = await fetchWithRetry(url, undefined, { label: `finnhub reported ${freq}`, attempts: 3 });
@@ -202,6 +227,35 @@ async function fetchReported(ticker: string, freq: Frequency): Promise<FinnhubFi
     if (j.error) throw new Error(`Finnhub reported: ${j.error}`);
     return j.data ?? [];
   });
+}
+
+async function fetchReported(ticker: string, freq: Frequency): Promise<FinnhubFiling[]> {
+  const aliases = TICKER_ALIASES[ticker.toUpperCase()] ?? [];
+  if (aliases.length === 0) return fetchReportedSingle(ticker, freq);
+
+  // Fetch en parallèle le symbole demandé + tous ses alias
+  const all = await Promise.all([
+    fetchReportedSingle(ticker, freq),
+    ...aliases.map(a => fetchReportedSingle(a, freq).catch(() => [] as FinnhubFiling[])),
+  ]);
+  const flat = all.flat();
+  if (flat.length === 0) return flat;
+
+  // Dédupe par endDate (clé naturelle d'un filing). Si deux symboles publient le
+  // même quarter, on garde celui du symbole demandé en priorité (= entrée la plus
+  // ancienne dans `all`, donc on garde la première occurrence rencontrée).
+  const seen = new Set<string>();
+  const merged: FinnhubFiling[] = [];
+  for (const f of flat) {
+    const key = `${f.endDate}|${f.year}|${f.quarter}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(f);
+  }
+  // Trier par endDate ASC (downstream attend cet ordre)
+  merged.sort((a, b) => a.endDate.localeCompare(b.endDate));
+  console.log(`[finnhub fundamentals] ${ticker} merged with aliases ${aliases.join(',')} : ${all.map((x, i) => `${i === 0 ? ticker : aliases[i-1]}=${x.length}`).join(' ')} → ${merged.length} dedupé`);
+  return merged;
 }
 
 /**
