@@ -4,6 +4,7 @@ import { CRITERION_HISTOGRAMS, CRITERION_LINECHARTS } from '@lubin/shared';
 import { HistogramModal } from './HistogramModal.js';
 import { PfcfChartModal } from './PfcfChartModal.js';
 import { CashRoceChartModal } from './CashRoceChartModal.js';
+import { CriterionInfoModal, hasInfoGuide } from './CriterionInfoModal.js';
 import './CriterionCard.css';
 
 const BADGE_LABEL: Record<Criterion['statut'], string> = {
@@ -31,6 +32,8 @@ export function CriterionCard({ c, ticker, currency = 'USD', annualOnly = false 
     : null;
   const clickable = chartKind !== null;
   const [open, setOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const hasGuide = hasInfoGuide(c.nom);
   const hintLabel = chartKind === 'line'
     ? lineConfig?.label
     : histogramConfig?.label;
@@ -46,7 +49,21 @@ export function CriterionCard({ c, ticker, currency = 'USD', annualOnly = false 
         title={clickable && hintLabel ? `Voir : ${hintLabel}` : undefined}
       >
         <div className="critere-header">
-          <div className="critere-name">{c.nom}</div>
+          <div className="critere-name">
+            {c.nom}
+            {hasGuide && (
+              <button
+                type="button"
+                className="critere-info-icon"
+                onClick={e => { e.stopPropagation(); setInfoOpen(true); }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); } }}
+                aria-label={`En savoir plus sur le critère ${c.nom}`}
+                title="Comment interpréter cette valeur"
+              >
+                ⓘ
+              </button>
+            )}
+          </div>
           <div className={`badge ${c.statut}`}>{BADGE_LABEL[c.statut]}</div>
         </div>
         <div className="critere-value">{c.valeur}</div>
@@ -83,6 +100,13 @@ export function CriterionCard({ c, ticker, currency = 'USD', annualOnly = false 
           ticker={ticker}
           annualOnly={annualOnly}
           onClose={() => setOpen(false)}
+        />
+      )}
+
+      {infoOpen && (
+        <CriterionInfoModal
+          criterionName={c.nom}
+          onClose={() => setInfoOpen(false)}
         />
       )}
     </>

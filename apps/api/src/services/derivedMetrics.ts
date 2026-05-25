@@ -326,18 +326,18 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
         : m.operatingLeverage ? 'Revenus croissent plus vite que les coûts' : 'Coûts grandissent plus vite que les revenus',
     },
     (() => {
-      // Le texte d'explication change selon la formule réellement appliquée :
-      //  - 'strict' : Damodaran complet (avec soustraction de l'excess cash)
-      //  - 'no-excess-fallback' : Bettin/Mauboussin classique (fallback pour ultra-cash-rich)
+      // Le texte est court : verdict + mention discrète du fallback si appliqué.
+      // La formule complète, les composants et l'explication du fallback sont dans la
+      // modale info (icône ⓘ sur la carte), pas dans le texte de la carte elle-même.
       const variant = m.cashROCEFormula;
-      const strictFormula = 'FCF ajusté SBC ÷ (Assets − CurLiab − Goodwill − Cash excédentaire). Cash excédentaire = max(0, cash − 2 % × revenue)';
-      const fallbackFormula = 'FCF ajusté SBC ÷ (Assets − CurLiab − Goodwill). Fallback Bettin/Mauboussin classique car l\'excess cash dépassait le capital opérationnel net (boîte ultra-cash-rich)';
-      const formulaText = variant === 'no-excess-fallback' ? fallbackFormula : strictFormula;
+      const fallbackNote = variant === 'no-excess-fallback'
+        ? ' (calcul fallback — voir ⓘ)'
+        : '';
       const verdict = m.cashROCE == null
         ? reasonOr(m, 'cashROCE', 'Donnée indisponible')
         : m.cashROCE > 0.15
-          ? `Excellent retour cash sur capital. Formule : ${formulaText}`
-          : `Retour sur capital insuffisant. Formule : ${formulaText}`;
+          ? `Excellent retour cash sur capital${fallbackNote}`
+          : `Retour sur capital insuffisant${fallbackNote}`;
       return {
         nom: 'Cash ROCE',
         valeur: m.cashROCE == null ? NOT_CALC : fmtPct(m.cashROCE),
