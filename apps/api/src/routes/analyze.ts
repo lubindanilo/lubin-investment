@@ -142,26 +142,48 @@ async function loadQuantData(ticker: string) {
       }
     }
 
-    metrics = computeDerivedMetrics({
-      metric, profile: fhProfile, quote,
-      yahooShareCagr: sharesCagrValue,
-      yahooFcfPerShareCagr: fcfPsCagrValue,
-      yahooFcfPerShareCagrReason: fcfPsCagrReason,
-      revenueGrowthOverride: fhRev.value,
-      revenueGrowthOverrideReason: fhRev.reason,
-      sharesGrowthReason: sharesCagrReason,
-      opMarginTrend: fhOpLev.value,
-      opMarginTrendReason: fhOpLev.reason,
-      // FCF_adj (TTM CFO − SBC + CapEx) — utilisé pour pfcfTTM, fcfMargin, cashROCE,
-      // netDebtFcf, ccr. Si null, on retombe sur les ratios précomputed Finnhub bruts.
-      adjFcfTtm: fhFcfAdj.ttmFcfAdj,
-      sbcShareOfFcf: fhFcfAdj.sbcShareOfFcf,
-      // Capital employé Bettin/Mauboussin (snapshot dernier Q) → dénominateur Cash ROCE.
-      // formulaUsed = 'strict' (avec excess) ou 'no-excess-fallback' (sans, pour cash-rich).
-      capitalEmployed: fhCapEmp.capitalEmployed,
-      capitalEmployedReason: fhCapEmp.reason,
-      capitalEmployedFormula: fhCapEmp.formulaUsed,
-    });
+    // ADRs étrangers (ASML, NSRGY, TSM…) : Finnhub /stock/metric expose des ratios
+    // précomputed mais /financials-reported renvoie 0 filing (les boîtes filent du
+    // 20-F annuel à la SEC, pas du 10-Q). Symptôme : fhFcfAdj et fhCapEmp sont tous
+    // les deux null. → bascule sur Yahoo annual pour les fondamentaux (cohérent avec
+    // les tickers EU purs).
+    const finnhubFinancialsEmpty = fhFcfAdj.ttmFcfAdj == null && fhCapEmp.capitalEmployed == null;
+    if (finnhubFinancialsEmpty) {
+      console.log(`[analyze ${ticker}] Finnhub /financials-reported vide (probable ADR étranger) → bascule Yahoo annual pour les fondamentaux`);
+      const resolved = await timed('yahoo resolve', resolveYahooTicker(ticker)).catch(() => null);
+      if (resolved) {
+        yahooSymbol = resolved.symbol;
+        currency = resolved.currency;
+        companyFromSource = resolved.longName ?? null;
+        const yfund = await timed('yahoo fundamentals (ADR)', getYahooFundamentals(resolved.symbol, resolved.price, resolved.currency, resolved.longName ?? null)).catch(() => null);
+        if (yfund) {
+          fundamentalsSource = 'yahoo';
+          metrics = yfund.metrics;
+        }
+      }
+    }
+
+    if (!metrics) {
+      metrics = computeDerivedMetrics({
+        metric, profile: fhProfile, quote,
+        yahooShareCagr: sharesCagrValue,
+        yahooFcfPerShareCagr: fcfPsCagrValue,
+        yahooFcfPerShareCagrReason: fcfPsCagrReason,
+        revenueGrowthOverride: fhRev.value,
+        revenueGrowthOverrideReason: fhRev.reason,
+        sharesGrowthReason: sharesCagrReason,
+        opMarginTrend: fhOpLev.value,
+        opMarginTrendReason: fhOpLev.reason,
+        // FCF_adj (TTM CFO − SBC + CapEx) — utilisé pour pfcfTTM, fcfMargin, cashROCE,
+        // netDebtFcf, ccr. Si null, on retombe sur les ratios précomputed Finnhub bruts.
+        adjFcfTtm: fhFcfAdj.ttmFcfAdj,
+        sbcShareOfFcf: fhFcfAdj.sbcShareOfFcf,
+        // Capital employé Bettin/Mauboussin (snapshot dernier Q) → dénominateur Cash ROCE.
+        capitalEmployed: fhCapEmp.capitalEmployed,
+        capitalEmployedReason: fhCapEmp.reason,
+        capitalEmployedFormula: fhCapEmp.formulaUsed,
+      });
+    }
   } else {
     console.log(`[analyze ${ticker}] Finnhub vide → fallback Yahoo`);
     const resolved = await timed('yahoo resolve', resolveYahooTicker(ticker)).catch(() => null);
