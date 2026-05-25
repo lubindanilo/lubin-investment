@@ -422,7 +422,19 @@ function extractFirst(filing: FinnhubFiling, section: Section, concepts: string[
   const items = filing.report?.[section];
   if (!items) return null;
   for (const concept of concepts) {
-    const found = items.find(i => i.concept === concept);
+    // Match exact d'abord
+    let found = items.find(i => i.concept === concept);
+    // Certains vieux filings reportent les concepts SANS le préfixe `us-gaap_` (constaté
+    // sur ADBE Q2 FY21 : `Revenues` au lieu de `us-gaap_Revenues`). On retombe sur le
+    // nom nu si l'exact match échoue. Garde-fou : on ne décompose qu'un préfixe connu
+    // (`us-gaap_` / `us-gaap:`), pas n'importe quel namespace (éviter `adbe:Foo` qui
+    // ne doit PAS matcher `Foo` d'un autre namespace).
+    if (!found) {
+      const bare = concept.replace(/^us-gaap[_:]/, '');
+      if (bare !== concept) {
+        found = items.find(i => i.concept === bare);
+      }
+    }
     if (found && typeof found.value === 'number' && Number.isFinite(found.value)) return found.value;
   }
   return null;
@@ -518,20 +530,30 @@ export async function getReportedTimeseries(
   }
 
   // Dérivation Q4 : annuel − Q3 YTD (cumulative only)
+  //
+  // ⚠ CRITIQUE : on ne dérive Q4 que si on a EFFECTIVEMENT le YTD Q3 (lastQuarterByYear === 3).
+  // Si seul Q1 a été décumulé (Q2 manquait → Q3 skipped), `ytdByYear[year]` contiendrait
+  // le YTD Q1 et on calculerait Q4 = annuel − Q1 = somme(Q2+Q3+Q4) → bar 3× trop haut.
+  // Cas réel : ADBE FY23 (Q2 absent chez Finnhub) → 23/12 affichait $14.74B au lieu de ~$5B.
   if (needAnnualForQ4) {
     let q4Count = 0;
+    let q4Skipped = 0;
     for (const a of annualFilings) {
       const annualValue = extractValue(a, cfg);
       if (annualValue == null) continue;
-      const q3Ytd = ytdByYear[a.year];
-      if (q3Ytd == null) continue; // pas de Q3 connu pour cette année → skip
+      // Vérification stricte : il faut Q3 YTD pour faire annual − Q3 = Q4
+      if (lastQuarterByYear[a.year] !== 3) {
+        q4Skipped++;
+        continue;
+      }
+      const q3Ytd = ytdByYear[a.year]!;
       const q4Date = a.endDate.slice(0, 10);
       // On vérifie qu'on n'a pas déjà ce point (cas rare où un 10-K aurait été parsé comme quarterly)
       if (points.some(p => p.date === q4Date)) continue;
       points.push({ date: q4Date, value: annualValue - q3Ytd });
       q4Count++;
     }
-    console.log(`[finnhub fundamentals] ${ticker}/${metric}: ${q4Count} Q4 dérivés du 10-K`);
+    console.log(`[finnhub fundamentals] ${ticker}/${metric}: ${q4Count} Q4 dérivés du 10-K${q4Skipped > 0 ? ` (${q4Skipped} Q4 non dérivables — Q3 YTD manquant)` : ''}`);
   }
 
   points.sort((a, b) => a.date.localeCompare(b.date));
