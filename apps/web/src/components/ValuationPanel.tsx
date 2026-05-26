@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import type { AnalyzeResponse, ValoParams, ValuationResult } from '@lubin/shared';
 import { api } from '../lib/api.js';
-import { CriteriaGrid } from './CriterionCard.js';
 import './ValuationPanel.css';
 
 export function ValuationPanel({ analysis, onValuationChanged }: {
@@ -31,9 +30,12 @@ export function ValuationPanel({ analysis, onValuationChanged }: {
     }
   }
 
+  // ⚠ Ne PAS re-render ici la carte critère Valorisation : elle est désormais affichée
+  // par AnalysePage juste au-dessus du panel (avec la carte P/FCF actuel à côté), sinon
+  // on aurait un doublon visible. Ce composant ne contient plus que le calculateur :
+  // stats récap + inputs hypothèses + bouton recalculer.
   return (
     <>
-      <CriteriaGrid items={[raw]} ticker={analysis.ticker} />
       <div className="valo-panel">
         <div className="valo-header">
           <div className="valo-title">⚙ Paramètres de valorisation</div>
