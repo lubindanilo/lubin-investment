@@ -17,6 +17,7 @@ import { getMetric, getQuote } from '../services/finnhub.js';
 import { loadQuantData } from '../services/quantSnapshot.js';
 import { fetchBusinessAnalysis, fetchManagementAnalysis } from '../services/openai.js';
 import { computeDerivedMetrics, buildQuantitativeCriteria, buildPfcfCriterion, buildValuation, filterNews } from '../services/derivedMetrics.js';
+import { writeCachedSnapshot, type CachedQuantSnapshot } from '../services/quantCache.js';
 import { prisma } from '../db/client.js';
 import { asyncHandler, ApiError } from '../middleware/error.js';
 import { analyzeLimiter } from '../middleware/rateLimit.js';
@@ -160,7 +161,7 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   const business = businessRow && isBusinessCacheValid(businessRow.business) ? businessRow.business : null;
   const management = managementRow && isManagementCacheValid(managementRow.management) ? managementRow.management : null;
 
-  res.json(buildResponse({
+  const response = buildResponse({
     ticker,
     quant,
     business,
@@ -168,8 +169,73 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
     management,
     businessCachedAt: business ? businessRow!.createdAt : null,
     managementCachedAt: management ? managementRow!.updatedAt : null,
-  }));
+  });
+
+  // ⚠ SINGLE SOURCE OF TRUTH : on persiste le résultat dans le cache global
+  // TickerQuantSnapshot. La watchlist le lira tel quel → impossible que les 2 vues
+  // divergent. Le score affiché en watchlist = exactement le score calculé ici.
+  await persistQuantCache(ticker, quant, response);
+
+  res.json(response);
 }));
+
+/**
+ * Écrit dans le cache global TickerQuantSnapshot le résultat du compute quant.
+ * Appelé à chaque GET /api/analyze pour garder la watchlist alignée.
+ *
+ * Notes :
+ * - On extrait les chiffres uniquement (les 10 premiers du tableau criteres) pour le
+ *   recompute du score watchlist. Pas le qualitatif (business + management) qui n'est
+ *   PAS utilisé par la watchlist.
+ * - adjFcfTtm + sharesOutstanding sont extraits du quant brut pour le recompute P/FCF
+ *   live de la watchlist (price live × shares / adjFcfTtm).
+ */
+async function persistQuantCache(
+  ticker: string,
+  quant: Awaited<ReturnType<typeof loadQuantData>>,
+  response: AnalyzeResponse,
+) {
+  const chiffres = response.criteres.slice(0, 10);
+  // Le score chiffres = même formule que côté watchlist (pass + round(warn × 0.5)).
+  // On filtre N/A pour le path Yahoo, comme buildSnapshot le faisait.
+  const evaluable = quant.fundamentalsSource === 'yahoo'
+    ? chiffres.filter(c => c.valeur !== 'N/A')
+    : chiffres;
+  const pass = evaluable.filter(c => c.statut === 'pass').length;
+  const warn = evaluable.filter(c => c.statut === 'warn').length;
+
+  // Extraction shares + adjFcfTtm pour le live recompute P/FCF
+  let adjFcfTtm: number | null = null;
+  let sharesOutstanding: number | null = null;
+  if (quant.fundamentalsSource === 'finnhub' && quant.rawFhFcfAdj && quant.rawFhCapEmp) {
+    adjFcfTtm = quant.rawFhFcfAdj.ttmFcfAdj;
+    sharesOutstanding = quant.rawFhCapEmp.sharesLatest;
+  } else if (quant.fundamentalsSource === 'yahoo') {
+    const m = quant.metrics;
+    sharesOutstanding = (m.marketCap != null && m.price != null && m.price > 0)
+      ? m.marketCap / m.price : null;
+    adjFcfTtm = (m.marketCap != null && m.pfcfTTM != null && m.pfcfTTM > 0)
+      ? m.marketCap / m.pfcfTTM : null;
+  }
+
+  const snapshot: CachedQuantSnapshot = {
+    ticker,
+    company: quant.company,
+    currency: quant.currency,
+    fundamentalsSource: quant.fundamentalsSource,
+    fundamentalsAvailable: quant.fundamentalsAvailable,
+    yahooSymbol: quant.yahooSymbol,
+    metrics: quant.metrics,
+    chiffres,
+    scoreChiffres: pass + Math.round(warn * 0.5),
+    scoreChiffresMax: evaluable.length,
+    adjFcfTtm,
+    sharesOutstanding,
+  };
+  await writeCachedSnapshot(ticker, snapshot).catch(err => {
+    console.warn(`[analyze ${ticker}] échec persistance cache : ${err.message}`);
+  });
+}
 
 // ─── POST /api/analyze/qualitative ─────────────────────────────────────────
 // Génère ce qui manque (business + management si absents). Renvoie la réponse complète.

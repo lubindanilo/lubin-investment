@@ -56,7 +56,25 @@ model ManagementAnalysis {
   updatedAt  DateTime @default(now()) @updatedAt
 }
 
+/// Cache GLOBAL par ticker du résultat de l'analyse quant.
+///
+/// Source unique de vérité partagée entre /api/analyze et /api/watchlist :
+/// quand l'utilisateur clique sur "Analyser" pour un ticker, le résultat (score,
+/// chiffres, métriques) est écrit ici. La watchlist lit DIRECTEMENT depuis cette
+/// table — elle ne recompute jamais. Conséquence : impossible de diverger.
+///
+/// Global (pas per-user) car les fundamentaux sont universels.
+model TickerQuantSnapshot {
+  ticker      String   @id
+  snapshot    Json
+  refreshedAt DateTime @default(now())
+
+  @@index([refreshedAt])
+}
+
 /// Watchlist par utilisateur. Un même ticker peut apparaître chez plusieurs users (différentes lignes).
+/// Les champs `snapshot` + `refreshedAt` sont legacy — gardés pour backward-compat mais
+/// plus utilisés depuis l'introduction de TickerQuantSnapshot (cache global).
 model WatchlistEntry {
   id        Int      @id @default(autoincrement())
   userId    String

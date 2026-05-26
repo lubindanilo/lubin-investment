@@ -1,3 +1,24 @@
+/**
+ * /api/watchlist — lecture pure depuis TickerQuantSnapshot (cache global).
+ *
+ * ARCHITECTURE — single source of truth :
+ *   - Le score, les chiffres, les métriques d'un ticker sont calculés UNE SEULE
+ *     FOIS, dans /api/analyze, qui écrit le résultat dans TickerQuantSnapshot.
+ *   - La watchlist LIT directement depuis ce cache. Elle ne recompute JAMAIS.
+ *   - Conséquence : le score affiché en watchlist EST exactement celui calculé
+ *     par l'analyse. Pas de bug "BKNG 9/10 watchlist vs 10/10 analyze" possible.
+ *
+ * Live overlay (la seule chose qui change à chaque GET) :
+ *   - Le prix bouge intra-day → on fetch /quote pour chaque ticker
+ *   - Le P/FCF se recalcule : (price_live × sharesOutstanding) / adjFcfTtm
+ *   - adjFcfTtm et sharesOutstanding sont stables entre 2 earnings (cachés)
+ *
+ * Endpoints :
+ *   GET  /api/watchlist          → liste les tickers de l'user + données cachées + prix live
+ *   POST /api/watchlist          → ajoute un ticker (déclenche un fetch initial via analyze)
+ *   DELETE /api/watchlist/:ticker → retire un ticker (ne supprime PAS le cache global)
+ *   POST /api/watchlist/refresh  → force re-analyze de tous les tickers de l'user
+ */
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { WatchlistEntry } from '@lubin/shared';
@@ -5,112 +26,86 @@ import { prisma } from '../db/client.js';
 import { getQuote } from '../services/finnhub.js';
 import { loadQuantData } from '../services/quantSnapshot.js';
 import { buildQuantitativeCriteria } from '../services/derivedMetrics.js';
+import {
+  getCachedSnapshot, getCachedSnapshotsBatch, writeCachedSnapshot,
+  type CachedQuantSnapshot,
+} from '../services/quantCache.js';
 import { asyncHandler, ApiError } from '../middleware/error.js';
 import { watchlistMutateLimiter } from '../middleware/rateLimit.js';
 import { requireAuth } from '../middleware/auth.js';
 
 export const watchlistRouter: Router = Router();
-
-// Toutes les routes ci-dessous nécessitent un user authentifié.
 watchlistRouter.use(requireAuth);
 
 const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z.\-]{1,8}$/);
 
 /**
- * Construit le snapshot d'un ticker pour la watchlist.
- *
- * IMPORTANT — partage de loadQuantData avec /api/analyze :
- *   Les deux routes appellent EXACTEMENT le même `loadQuantData()` du service partagé.
- *   Conséquence : mêmes inputs → mêmes outputs → impossibilité mathématique de diverger
- *   sur le score chiffres ou le pfcfTTM. Fini le bug "BKNG 9/10 watchlist vs 10/10 analyze".
- *
- * Options : on skip news + earnings (pas affichés en watchlist) pour économiser 2 calls
- * Finnhub par snapshot rebuild.
+ * Compute fresh + write to global cache. Utilisé quand un ticker n'a pas encore
+ * de cache (ex : ajout watchlist d'un ticker jamais analysé) ou pour forcer un
+ * refresh. Réutilise loadQuantData → même logique que /api/analyze, garanti.
  */
-async function buildSnapshot(ticker: string): Promise<WatchlistEntry> {
-  const data = await loadQuantData(ticker, { includeNews: false, includeEarnings: false, log: false });
+async function computeAndCache(ticker: string): Promise<CachedQuantSnapshot> {
+  const quant = await loadQuantData(ticker, { includeNews: false, includeEarnings: false, log: false });
 
-  // Cas "Finnhub complètement vide ET Yahoo n'a pas pu résoudre" → emptyEntry-like
-  if (!data.fundamentalsAvailable) {
-    return {
-      ticker,
-      name: data.company,
-      price: data.metrics.price,
-      pfcfTTM: null,
-      scoreChiffres: 0,
-      scoreChiffresMax: 0,
-      currency: data.currency,
-      source: data.fundamentalsSource,
-    };
-  }
-
-  const m = data.metrics;
-  const quant = buildQuantitativeCriteria(m);
-  // Pour le path Yahoo on filtre les N/A (pas tous les critères calculables sans Finnhub)
-  // Pour le path Finnhub on garde tout (10 critères évalués).
-  const evaluable = data.fundamentalsSource === 'yahoo'
-    ? quant.filter(c => c.valeur !== 'N/A')
-    : quant;
+  // Reconstitue les 10 chiffres + score (même formule que persistQuantCache dans analyze.ts)
+  const chiffres = buildQuantitativeCriteria(quant.metrics);
+  const evaluable = quant.fundamentalsSource === 'yahoo'
+    ? chiffres.filter(c => c.valeur !== 'N/A')
+    : chiffres;
   const pass = evaluable.filter(c => c.statut === 'pass').length;
   const warn = evaluable.filter(c => c.statut === 'warn').length;
 
-  // Champs internes pour le recompute P/FCF live à chaque GET (cf. enrichWithLivePrice).
-  // - Path Finnhub : adjFcfTtm + sharesLatest viennent directement des fetchs raw.
-  // - Path Yahoo : on déduit shares = marketCap / price et adjFcfTtm = marketCap / pfcfTTM
-  //   depuis les valeurs déjà calculées par getYahooFundamentals.
+  // Extraction shares + adjFcfTtm pour le recompute P/FCF live
   let adjFcfTtm: number | null = null;
   let sharesOutstanding: number | null = null;
-  if (data.fundamentalsSource === 'finnhub' && data.rawFhFcfAdj && data.rawFhCapEmp) {
-    adjFcfTtm = data.rawFhFcfAdj.ttmFcfAdj;
-    sharesOutstanding = data.rawFhCapEmp.sharesLatest;
-  } else if (data.fundamentalsSource === 'yahoo') {
+  if (quant.fundamentalsSource === 'finnhub' && quant.rawFhFcfAdj && quant.rawFhCapEmp) {
+    adjFcfTtm = quant.rawFhFcfAdj.ttmFcfAdj;
+    sharesOutstanding = quant.rawFhCapEmp.sharesLatest;
+  } else if (quant.fundamentalsSource === 'yahoo') {
+    const m = quant.metrics;
     sharesOutstanding = (m.marketCap != null && m.price != null && m.price > 0)
       ? m.marketCap / m.price : null;
     adjFcfTtm = (m.marketCap != null && m.pfcfTTM != null && m.pfcfTTM > 0)
       ? m.marketCap / m.pfcfTTM : null;
   }
 
-  return {
+  const snapshot: CachedQuantSnapshot = {
     ticker,
-    name: data.company,
-    price: m.price,
-    pfcfTTM: m.pfcfTTM,
+    company: quant.company,
+    currency: quant.currency,
+    fundamentalsSource: quant.fundamentalsSource,
+    fundamentalsAvailable: quant.fundamentalsAvailable,
+    yahooSymbol: quant.yahooSymbol,
+    metrics: quant.metrics,
+    chiffres,
     scoreChiffres: pass + Math.round(warn * 0.5),
     scoreChiffresMax: evaluable.length,
-    currency: data.currency,
-    source: data.fundamentalsSource,
     adjFcfTtm,
     sharesOutstanding,
   };
+  await writeCachedSnapshot(ticker, snapshot);
+  return snapshot;
 }
 
-const SNAPSHOT_FRESHNESS_MS = 30 * 60 * 1000;
-/** Version actuelle du schéma de snapshot. Bump à chaque changement de structure pour
- *  forcer le re-fetch des snapshots stockés en DB (ils auront un schéma différent).
- *
- *  Actuel : score sur 10 chiffres (P/FCF sorti). Avant : score sur 11. */
-const SNAPSHOT_SCHEMA_SCORE_MAX = 10;
-
-/** Détecte les snapshots stockés avec un ancien schéma (avant un refactor). */
-function hasOutdatedSchema(snap: WatchlistEntry | null): boolean {
-  if (!snap || !snap.source || snap.scoreChiffresMax <= 0) return false;
-  if (snap.scoreChiffresMax !== SNAPSHOT_SCHEMA_SCORE_MAX) return true;
-  // adjFcfTtm + sharesOutstanding requis pour le live P/FCF — si absent, snapshot
-  // pré-live-price → marquer obsolète pour qu'un rebuild les peuple.
-  if (snap.adjFcfTtm === undefined || snap.sharesOutstanding === undefined) return true;
-  return false;
+/**
+ * Convertit un CachedQuantSnapshot (forme DB riche) vers WatchlistEntry (forme
+ * API minimale). On expose juste ce dont l'UI watchlist a besoin pour le tableau.
+ */
+function toWatchlistEntry(s: CachedQuantSnapshot): WatchlistEntry {
+  return {
+    ticker: s.ticker,
+    name: s.company,
+    price: s.metrics.price,
+    pfcfTTM: s.metrics.pfcfTTM,
+    scoreChiffres: s.scoreChiffres,
+    scoreChiffresMax: s.scoreChiffresMax,
+    currency: s.currency,
+    source: s.fundamentalsSource,
+    adjFcfTtm: s.adjFcfTtm,
+    sharesOutstanding: s.sharesOutstanding,
+  };
 }
 
-function isFresh(refreshedAt: Date | null | undefined, snap: WatchlistEntry | null): boolean {
-  if (!refreshedAt) return false;
-  if (Date.now() - refreshedAt.getTime() >= SNAPSHOT_FRESHNESS_MS) return false;
-  // Schema check : si le snap existant a un schéma obsolète, considéré stale même
-  // si time-fresh — il faut le re-build pour avoir le nouveau format.
-  if (hasOutdatedSchema(snap)) return false;
-  return true;
-}
-
-/** Fallback de présentation pour les lignes sans snapshot DB. */
 function emptyEntry(ticker: string): WatchlistEntry {
   return {
     ticker, name: ticker, price: null, pfcfTTM: null,
@@ -120,70 +115,92 @@ function emptyEntry(ticker: string): WatchlistEntry {
 }
 
 /**
- * Recalcule pfcfTTM en live = (price × sharesOutstanding) / adjFcfTtm.
- * `adjFcfTtm` et `sharesOutstanding` viennent du snapshot DB (quasi-statiques entre
- * earnings) ; `price` est fetché en temps réel via Finnhub /quote. Si quote échoue
- * ou si l'une des 2 valeurs statiques manque, on garde la valeur DB (stale acceptée).
- *
- * Coût : 1 appel /quote par ticker. Finnhub /quote = ~100-300 ms par appel,
- * parallélisé pour toute la watchlist via Promise.all + finnhubLimiter.
+ * Recompute du P/FCF en LIVE : (price_temps_réel × sharesOutstanding) / adjFcfTtm.
+ * Le score lui-même ne bouge PAS (vient direct du cache, écrit par analyze).
+ * Un appel /quote par ticker, parallélisé. ~1-2s pour 20 tickers attendus.
  */
-async function enrichWithLivePrice(snapshots: WatchlistEntry[]): Promise<WatchlistEntry[]> {
+async function enrichWithLivePrice(entries: WatchlistEntry[]): Promise<WatchlistEntry[]> {
   return Promise.all(
-    snapshots.map(async snap => {
+    entries.map(async snap => {
       if (!snap.source || snap.adjFcfTtm == null || snap.sharesOutstanding == null) {
-        return snap; // pas assez d'info pour recompute, on garde la valeur DB
+        return snap;
       }
       try {
         const q = await getQuote(snap.ticker);
         const livePrice = q?.c;
         if (!livePrice || livePrice <= 0) return snap;
-        // pfcfTTM = (price × shares) / adjFcfTtm. adjFcfTtm est en USD bruts,
-        // sharesOutstanding aussi (count), price en monnaie par action → mcap en monnaie brute.
         const livePfcf = (livePrice * snap.sharesOutstanding) / snap.adjFcfTtm;
         if (!Number.isFinite(livePfcf) || livePfcf <= 0) return snap;
         return { ...snap, price: livePrice, pfcfTTM: livePfcf };
       } catch {
-        return snap; // quote a planté → snapshot DB inchangé
+        return snap;
       }
     }),
   );
 }
 
+// ─── GET /api/watchlist ────────────────────────────────────────────────────
+// Lecture pure : liste des tickers de l'user × cache global TickerQuantSnapshot.
+// Aucun recompute. Seul le prix est rafraîchi en live.
 watchlistRouter.get('/', asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user!.userId;
+  const t0 = Date.now();
+
   const entries = await prisma.watchlistEntry.findMany({
     where: { userId },
     orderBy: { addedAt: 'asc' },
   });
-  // Snapshot DB = fast path. Pour le P/FCF qui dépend du prix temps réel, on
-  // recalcule en live : fetch /quote en parallèle + (price × shares) / adjFcfTtm.
-  // Si quote échoue ou snapshot incomplet → on tombe sur la valeur DB stale.
-  const dbSnapshots: WatchlistEntry[] = entries.map(e => {
-    const snap = (e.snapshot as WatchlistEntry | null) ?? null;
-    return snap ?? emptyEntry(e.ticker);
+  const tickers = entries.map(e => e.ticker);
+
+  // 1) Lit le cache global en batch — une seule query
+  const cacheByTicker = await getCachedSnapshotsBatch(tickers);
+
+  // 2) Construit la liste : cache hit → toWatchlistEntry, cache miss → emptyEntry
+  //    (l'utilisateur peut cliquer sur le ticker pour déclencher l'analyse)
+  const baseList: WatchlistEntry[] = entries.map(e => {
+    const cached = cacheByTicker.get(e.ticker);
+    return cached ? toWatchlistEntry(cached) : emptyEntry(e.ticker);
   });
-  const t0 = Date.now();
-  const result = await enrichWithLivePrice(dbSnapshots);
-  console.log(`[watchlist GET user=${userId.slice(0, 8)}] ${dbSnapshots.length} entries enriched live in ${Date.now() - t0}ms`);
+
+  // 3) Live overlay sur le prix → recompute du P/FCF (le score reste tel quel)
+  const result = await enrichWithLivePrice(baseList);
+
+  console.log(`[watchlist GET user=${userId.slice(0, 8)}] ${tickers.length} tickers, ${cacheByTicker.size} cached, live overlay in ${Date.now() - t0}ms`);
   res.json(result);
 }));
 
+// ─── POST /api/watchlist ───────────────────────────────────────────────────
+// Ajoute un ticker. Si le ticker n'a pas encore de cache → compute + cache global.
 watchlistRouter.post('/', watchlistMutateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user!.userId;
   const parse = TickerSchema.safeParse(req.body?.ticker);
   if (!parse.success) throw new ApiError(400, 'ticker invalide');
   const ticker = parse.data;
 
-  const snapshot = await buildSnapshot(ticker);
+  // Ajoute la ligne user-ticker
   await prisma.watchlistEntry.upsert({
     where: { userId_ticker: { userId, ticker } },
-    update: { snapshot: snapshot as object, refreshedAt: new Date() },
-    create: { userId, ticker, snapshot: snapshot as object, refreshedAt: new Date() },
+    update: { addedAt: new Date() },
+    create: { userId, ticker },
   });
-  res.json(snapshot);
+
+  // Vérifie le cache global ; compute si absent
+  let snapshot = await getCachedSnapshot(ticker);
+  if (!snapshot) {
+    try {
+      snapshot = await computeAndCache(ticker);
+    } catch (err) {
+      console.warn(`[watchlist POST ${ticker}] compute failed: ${(err as Error).message}`);
+      res.json(emptyEntry(ticker));
+      return;
+    }
+  }
+  res.json(toWatchlistEntry(snapshot));
 }));
 
+// ─── DELETE /api/watchlist/:ticker ─────────────────────────────────────────
+// Retire UNIQUEMENT la ligne user-ticker. Le cache global TickerQuantSnapshot
+// est PRÉSERVÉ (d'autres users peuvent l'utiliser).
 watchlistRouter.delete('/:ticker', watchlistMutateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user!.userId;
   const parse = TickerSchema.safeParse(req.params.ticker);
@@ -192,36 +209,32 @@ watchlistRouter.delete('/:ticker', watchlistMutateLimiter, asyncHandler(async (r
   res.json({ ok: true });
 }));
 
-/**
- * POST /api/watchlist/refresh?force=true
- * - Sans force : skip les snapshots < 30 min (économise Finnhub + Yahoo)
- * - Avec force : tout re-fetch
- */
+// ─── POST /api/watchlist/refresh ───────────────────────────────────────────
+// Force re-analyze de chaque ticker → met à jour le cache global.
+// Le frontend appelle ça quand l'utilisateur veut rafraîchir manuellement.
 watchlistRouter.post('/refresh', asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user!.userId;
-  const force = req.query.force === 'true';
+  const t0 = Date.now();
   const entries = await prisma.watchlistEntry.findMany({ where: { userId } });
 
-  let staleCount = 0;
-  const snapshots = await Promise.all(
-    entries.map(async e => {
-      const existing = (e.snapshot as WatchlistEntry | null);
-      const fallback = existing ?? emptyEntry(e.ticker);
-      if (!force && isFresh(e.refreshedAt, existing)) return fallback;
-      staleCount++;
-      try {
-        const snap = await buildSnapshot(e.ticker);
-        await prisma.watchlistEntry.update({
-          where: { userId_ticker: { userId, ticker: e.ticker } },
-          data: { snapshot: snap as object, refreshedAt: new Date() },
-        });
-        return snap;
-      } catch (err) {
-        console.warn('[watchlist refresh]', e.ticker, (err as Error).message);
-        return fallback;
-      }
-    })
-  );
-  console.log(`[watchlist refresh user=${userId.slice(0, 8)}] ${staleCount}/${entries.length} re-fetched (force=${force})`);
-  res.json(snapshots);
+  // Sequencer les computes pour ne pas exploser Finnhub rate limit
+  // (Promise.all serait trop violent : N tickers × ~12 fetches Finnhub en parallèle).
+  // On séquentiel-await avec un timeout global de l'event loop côté Vercel (60s max).
+  const results: WatchlistEntry[] = [];
+  for (const e of entries) {
+    try {
+      const snap = await computeAndCache(e.ticker);
+      results.push(toWatchlistEntry(snap));
+    } catch (err) {
+      console.warn(`[watchlist refresh ${e.ticker}] ${(err as Error).message}`);
+      // En cas d'échec, on tente de servir le cache existant si dispo
+      const existing = await getCachedSnapshot(e.ticker);
+      results.push(existing ? toWatchlistEntry(existing) : emptyEntry(e.ticker));
+    }
+  }
+  // Live overlay sur le prix (même logique que GET)
+  const enriched = await enrichWithLivePrice(results);
+
+  console.log(`[watchlist refresh user=${userId.slice(0, 8)}] ${entries.length} tickers refreshed in ${Date.now() - t0}ms`);
+  res.json(enriched);
 }));
