@@ -21,7 +21,7 @@
  *   - Pas de quarter récent connu (delta < 6 mois)
  *   - Pas assez de quarters pour calculer TTM (besoin ≥ 4)
  */
-import { fetchSplitEvents, splitAdjustWithDiscontinuity, cumulativeSplitFactor } from './yahooSplits.js';
+import { fetchSplitEvents, splitAdjustWithDiscontinuity } from './yahooSplits.js';
 import { getReportedTimeseries } from './finnhubFundamentals.js';
 import { resolveYahooTicker } from './yahooResolve.js';
 import { yahooLimiter } from '../lib/limiter.js';
@@ -205,29 +205,25 @@ async function getPfcfHistoryUs(ticker: string, years: number): Promise<PfcfHist
  *   pfcf(année N) = price(fin année N) × shares(année N, split-adj) / FCF(année N)
  */
 async function getPfcfHistoryAnnualYahoo(yahooSymbol: string, years: number): Promise<PfcfHistoryPoint[]> {
-  // Fetch direct des séries annuelles + splits via le helper bas-niveau
-  const [annualFcf, annualShares, prices, splits] = await Promise.all([
+  // Fetch direct des séries annuelles via le helper bas-niveau.
+  // Note : on n'applique PLUS cumulativeSplitFactor sur les shares annuelles — Yahoo
+  // restate déjà l'historique post-split (cas NVO 2:1 2023, AAPL 4:1 2020 vérifiés).
+  // Double-comptage évité.
+  const [annualFcf, annualShares, prices] = await Promise.all([
     fetchYahooAnnualBasic(yahooSymbol, 'annualFreeCashFlow'),
     fetchYahooAnnualBasic(yahooSymbol, 'annualDilutedAverageShares'),
     fetchPriceHistory(yahooSymbol, Math.max(years, 5), '1mo'),
-    fetchSplitEvents(yahooSymbol),
   ]);
   if (annualFcf.length === 0 || annualShares.length === 0 || prices.length === 0) {
     console.warn(`[pfcf ${yahooSymbol}] EU pas assez de données (fcf=${annualFcf.length}, shares=${annualShares.length}, prices=${prices.length})`);
     return [];
   }
 
-  // Split-adjust les shares (Yahoo as-filed → current-basis)
-  const sharesAdjusted = annualShares.map(s => {
-    const ts = Math.floor(new Date(s.date + 'T00:00:00Z').getTime() / 1000);
-    return { date: s.date, value: s.value * cumulativeSplitFactor(splits, ts) };
-  });
-
   // Index par année
   const fcfByYear: Record<string, number> = {};
   const sharesByYear: Record<string, number> = {};
   for (const p of annualFcf) fcfByYear[p.date.slice(0, 4)] = p.value;
-  for (const p of sharesAdjusted) sharesByYear[p.date.slice(0, 4)] = p.value;
+  for (const p of annualShares) sharesByYear[p.date.slice(0, 4)] = p.value;
 
   // Pour chaque année où on a (FCF, shares), on trouve le prix de fin d'année correspondant
   const points: PfcfHistoryPoint[] = [];
@@ -250,7 +246,7 @@ async function getPfcfHistoryAnnualYahoo(yahooSymbol: string, years: number): Pr
     points.push({ date: yearEnd, pfcf: Math.round(pfcf * 100) / 100 });
   }
 
-  console.log(`[pfcf ${yahooSymbol}] EU ${points.length} pts annual — fcf=${annualFcf.length} shares=${annualShares.length} splits=${splits.length}`);
+  console.log(`[pfcf ${yahooSymbol}] EU ${points.length} pts annual — fcf=${annualFcf.length} shares=${annualShares.length}`);
   return points;
 }
 

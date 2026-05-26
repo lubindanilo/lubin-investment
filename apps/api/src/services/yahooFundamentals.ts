@@ -23,8 +23,8 @@
  * Donc en fait 10/11 + le critère valorisation. SBC reste null (free tier, pas accessible).
  */
 import { yahooLimiter } from '../lib/limiter.js';
-import { fetchSplitEvents, cumulativeSplitFactor } from './yahooSplits.js';
 import { computeExcessCash } from './finnhubFundamentals.js';
+import { computeFcfPerShareCagr as computeFcfPerShareCagrYahoo } from './yahoo.js';
 import type { DerivedMetrics } from '@lubin/shared';
 
 const TIMESERIES_BASE = 'https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries';
@@ -69,15 +69,6 @@ function extract(response: TimeseriesResponse, type: string): { fiscalYear: numb
     })
     .filter((x): x is { fiscalYear: number; date: string; value: number } => x !== null && Number.isFinite(x.fiscalYear))
     .sort((a, b) => a.fiscalYear - b.fiscalYear);
-}
-
-/** Helper : applique le split-adjust à une série de share counts (Yahoo as-filed → current-basis). */
-function adjustSharesForSplits(shares: { fiscalYear: number; date: string; value: number }[], splits: Awaited<ReturnType<typeof fetchSplitEvents>>) {
-  if (splits.length === 0) return shares;
-  return shares.map(s => {
-    const ts = Math.floor(new Date(s.date + 'T00:00:00Z').getTime() / 1000);
-    return { ...s, value: s.value * cumulativeSplitFactor(splits, ts) };
-  });
 }
 
 /** Helper : récupère la dernière valeur d'une série. */
@@ -150,10 +141,7 @@ export async function getYahooFundamentals(
         'annualDilutedAverageShares',
         'annualOrdinarySharesNumber',
       ];
-      const [data, splits] = await Promise.all([
-        fetchBatch(yahooSymbol, types),
-        fetchSplitEvents(yahooSymbol),
-      ]);
+      const data = await fetchBatch(yahooSymbol, types);
       if (data.timeseries?.error) {
         console.warn(`[yahoo fund ${yahooSymbol}]`, data.timeseries.error.description);
         return null;
@@ -172,10 +160,13 @@ export async function getYahooFundamentals(
       const equity         = extract(data, 'annualStockholdersEquity');
       const currentAssets  = extract(data, 'annualCurrentAssets');
       const currentLiab    = extract(data, 'annualCurrentLiabilities');
+      // Shares : Yahoo restate déjà l'historique post-split (vérifié sur NVO 2:1 2023, AAPL 4:1
+      // 2020 — toutes les années annual sont en current basis). Ne PAS appliquer
+      // cumulativeSplitFactor sinon on double-compte le split. Bug constaté NVO : FCF/share 2022
+      // affichait 7.07 DKK (FCF / 2×shares) au lieu de 14.25 DKK → CAGR -2.6% trompeur.
       const sharesDilutedRaw = extract(data, 'annualDilutedAverageShares');
       const sharesOrdinaryRaw = extract(data, 'annualOrdinarySharesNumber');
-      const sharesRaw = sharesDilutedRaw.length >= 2 ? sharesDilutedRaw : sharesOrdinaryRaw;
-      const shares = adjustSharesForSplits(sharesRaw, splits);
+      const shares = sharesDilutedRaw.length >= 2 ? sharesDilutedRaw : sharesOrdinaryRaw;
 
       const latestRev = latest(revenue);
       const latestNI = latest(netIncome);
@@ -198,15 +189,29 @@ export async function getYahooFundamentals(
       // Revenue CAGR 5Y
       const revenueCagr = cagr(revenue);
 
-      // FCF/share CAGR (split-adjusté)
+      // FCF/share CAGR : régression log-linéaire + détection d'anomalie partial-year.
+      // On bénéficie de la même robustesse que pour le path Finnhub (cf. yahoo.ts
+      // computeFcfPerShareCagr) : bornes atypiques (cas NVO 2025 = 28.99B DKK partial,
+      // < 50% du median) sont flaggées comme "Non calculable" au lieu de générer un
+      // CAGR trompeur. Refactor : on délègue à la même fonction au lieu de réinventer.
       let fcfPerShareCagr: number | null = null;
+      let fcfPerShareCagrReason: string | undefined;
       if (fcf.length >= 2 && shares.length >= 2) {
         const fcfByYear: Record<number, number> = {};
         for (const f of fcf) fcfByYear[f.fiscalYear] = f.value;
-        const fcfPsSeries = shares
-          .filter(s => s.value > 0 && fcfByYear[s.fiscalYear] != null && fcfByYear[s.fiscalYear]! > 0)
-          .map(s => ({ fiscalYear: s.fiscalYear, value: fcfByYear[s.fiscalYear]! / s.value }));
-        fcfPerShareCagr = cagr(fcfPsSeries);
+        // On construit le format attendu par computeFcfPerShareCagr : SharesHistoryPoint
+        // (avec fcf optionnel par année quand on l'a). Yahoo restate déjà les shares
+        // post-split, donc on prend les valeurs telles quelles.
+        const history = shares
+          .filter(s => s.value > 0)
+          .map(s => ({
+            fiscalYear: s.fiscalYear,
+            dilutedShares: s.value,
+            fcf: fcfByYear[s.fiscalYear] ?? null,
+          }));
+        const result = computeFcfPerShareCagrYahoo(history);
+        fcfPerShareCagr = result.value;
+        fcfPerShareCagrReason = result.reason;
       }
 
       // Évolution actions 5Y (déjà split-adj)
@@ -313,6 +318,11 @@ export async function getYahooFundamentals(
       else if (!latestFcf) reasons.pfcfTTM = 'FCF indisponible';
       else if (latestFcf.value <= 0) reasons.pfcfTTM = 'FCF négatif sur le dernier exercice';
       else pfcfTTM = marketCap / latestFcf.value;
+
+      // Propage la raison d'anomalie FCF/action vers notCalculableReasons
+      if (fcfPerShareCagr == null && fcfPerShareCagrReason) {
+        reasons.fcfPerShareCagr = fcfPerShareCagrReason;
+      }
 
       const metrics: DerivedMetrics = {
         netMargin,

@@ -244,15 +244,21 @@ export function computeFcfPerShareCagr(history: SharesHistoryPoint[] | null): Fc
     return { value: null, reason: 'Moins de 2 années avec FCF > 0' };
   }
 
-  // Anomalie partial-year sur le dernier point (cas AMZN 2025 : 7.7B vs médiane 32B)
+  // Anomalie partial-year sur le dernier point. Cas constatés :
+  //   - AMZN 2025 : 7.7B vs médiane 32B (24% — facile à catcher)
+  //   - NVO 2025  : 28.99B DKK vs médiane 69.66B DKK (41.6% — limite, on a remonté
+  //     le seuil de 40% à 50% pour le catcher)
+  // 50% reste conservateur : seules les chutes vraiment brutales (>50% drop YoY) sont
+  // flaggées, ce qui est presque toujours soit un partial-year, soit un événement
+  // exceptionnel qui mérite une attention manuelle (restructuring, M&A massive…).
   if (valid.length >= 3) {
     const last = valid[valid.length - 1]!;
     const prev = valid.slice(-4, -1).map(p => p.fcf!).filter(Boolean).sort((a, b) => a - b);
     const median = prev[Math.floor(prev.length / 2)];
-    if (median != null && last.fcf! < median * 0.4) {
+    if (median != null && last.fcf! < median * 0.5) {
       return {
         value: null,
-        reason: `Données Yahoo ${last.fiscalYear} suspectes (FCF ${(last.fcf! / 1e9).toFixed(1)}B vs médiane ${(median / 1e9).toFixed(1)}B sur les années précédentes — probable partial year)`,
+        reason: `Données Yahoo ${last.fiscalYear} suspectes (FCF ${(last.fcf! / 1e9).toFixed(1)}B vs médiane ${(median / 1e9).toFixed(1)}B sur les années précédentes — probable partial year ou événement exceptionnel)`,
       };
     }
   }
