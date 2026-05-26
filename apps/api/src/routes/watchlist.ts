@@ -2,11 +2,9 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { WatchlistEntry } from '@lubin/shared';
 import { prisma } from '../db/client.js';
-import { getMetric, getProfile2, getQuote } from '../services/finnhub.js';
-import { computeAdjustedFcfTtm, computeCapitalEmployedSnapshot } from '../services/finnhubFundamentals.js';
-import { resolveYahooTicker } from '../services/yahooResolve.js';
-import { getYahooFundamentals } from '../services/yahooFundamentals.js';
-import { computeDerivedMetrics, buildQuantitativeCriteria } from '../services/derivedMetrics.js';
+import { getQuote } from '../services/finnhub.js';
+import { loadQuantData } from '../services/quantSnapshot.js';
+import { buildQuantitativeCriteria } from '../services/derivedMetrics.js';
 import { asyncHandler, ApiError } from '../middleware/error.js';
 import { watchlistMutateLimiter } from '../middleware/rateLimit.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -19,126 +17,70 @@ watchlistRouter.use(requireAuth);
 const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z.\-]{1,8}$/);
 
 /**
- * Construit le snapshot d'un ticker (prix, P/FCF, score, devise) pour affichage en watchlist.
+ * Construit le snapshot d'un ticker pour la watchlist.
  *
- * IMPORTANT — cohérence avec /api/analyze :
- *   - On fetch adjFcfTtm + capitalEmployedSnapshot comme analyze.ts pour que le pfcfTTM
- *     affiché en watchlist soit le pfcfTTM SBC-AJUSTÉ (mcap / FCF_adj) et pas la valeur
- *     raw Finnhub (pfcfShareTTM, non ajustée). Sans ça, watchlist montrait 9.9 pour
- *     ADBE et analyze montrait 11.2 → divergence visible par l'utilisateur.
- *   - On détecte aussi le pattern ADR (Finnhub /financials-reported vide pour ASML/NSRGY)
- *     et on bascule sur Yahoo, comme analyze.ts.
+ * IMPORTANT — partage de loadQuantData avec /api/analyze :
+ *   Les deux routes appellent EXACTEMENT le même `loadQuantData()` du service partagé.
+ *   Conséquence : mêmes inputs → mêmes outputs → impossibilité mathématique de diverger
+ *   sur le score chiffres ou le pfcfTTM. Fini le bug "BKNG 9/10 watchlist vs 10/10 analyze".
  *
- * Stratégie :
- *   1. Finnhub d'abord (rapide, complet pour les US)
- *   2. Si Finnhub /financials-reported vide OU pas de quote → fallback Yahoo
+ * Options : on skip news + earnings (pas affichés en watchlist) pour économiser 2 calls
+ * Finnhub par snapshot rebuild.
  */
 async function buildSnapshot(ticker: string): Promise<WatchlistEntry> {
-  const [metric, profile, quote, fhFcfAdj, fhCapEmp] = await Promise.all([
-    getMetric(ticker).catch(() => null),
-    getProfile2(ticker).catch(() => null),
-    getQuote(ticker).catch(() => null),
-    computeAdjustedFcfTtm(ticker).catch(() => ({ ttmFcfAdj: null, ttmCfo: null, ttmSbc: null, ttmCapex: null, sbcShareOfFcf: null, asOf: null } as Awaited<ReturnType<typeof computeAdjustedFcfTtm>>)),
-    computeCapitalEmployedSnapshot(ticker).catch(() => ({ totalAssets: null, currentLiabilities: null, goodwill: null, equity: null, totalDebt: null, totalCash: null, revenueTtm: null, excessCash: null, formulaUsed: null, capitalEmployed: null, asOf: null } as Awaited<ReturnType<typeof computeCapitalEmployedSnapshot>>)),
-  ]);
+  const data = await loadQuantData(ticker, { includeNews: false, includeEarnings: false, log: false });
 
-  const metricEmpty = !metric || !metric.metric || Object.keys(metric.metric).length === 0;
-  const hasPrice = !!quote?.c && quote.c > 0;
-  const finnhubUsable = hasPrice || !metricEmpty;
-  // ADR pattern : /stock/metric répond mais /financials-reported est vide → utiliser Yahoo
-  const finnhubFinancialsEmpty = fhFcfAdj.ttmFcfAdj == null && fhCapEmp.capitalEmployed == null;
-
-  if (finnhubUsable && !finnhubFinancialsEmpty) {
-    // Path US standard : pfcfTTM est calculé par computeDerivedMetrics à partir de
-    // adjFcfTtm (mcap × 1e6 / FCF_adj). Mêmes inputs que analyze.ts → mêmes outputs.
-    const m = computeDerivedMetrics({
-      metric, profile, quote,
-      adjFcfTtm: fhFcfAdj.ttmFcfAdj,
-      sbcShareOfFcf: fhFcfAdj.sbcShareOfFcf,
-      capitalEmployed: fhCapEmp.capitalEmployed,
-      capitalEmployedReason: fhCapEmp.reason,
-      capitalEmployedFormula: fhCapEmp.formulaUsed,
-      // Fallbacks robustesse (cf. analyze.ts) — pas de surcoût, ces champs viennent
-      // du même fetch computeCapitalEmployedSnapshot.
-      revenueTtm: fhCapEmp.revenueTtm,
-      netIncomeTtm: fhCapEmp.netIncomeTtm,
-      sharesLatest: fhCapEmp.sharesLatest,
-      currentAssetsSnapshot: fhCapEmp.currentAssets,
-      currentLiabilitiesSnapshot: fhCapEmp.currentLiabilities,
-      totalDebtSnapshot: fhCapEmp.totalDebt,
-      totalCashSnapshot: fhCapEmp.totalCash,
-    });
-    const quant = buildQuantitativeCriteria(m);  // 10 chiffres (P/FCF est désormais à part)
-    const pass = quant.filter(c => c.statut === 'pass').length;
-    const warn = quant.filter(c => c.statut === 'warn').length;
+  // Cas "Finnhub complètement vide ET Yahoo n'a pas pu résoudre" → emptyEntry-like
+  if (!data.fundamentalsAvailable) {
     return {
       ticker,
-      name: profile?.name ?? ticker,
-      price: m.price,
-      pfcfTTM: m.pfcfTTM,
-      scoreChiffres: pass + Math.round(warn * 0.5),
-      scoreChiffresMax: quant.length,  // 10
-      currency: 'USD',
-      source: 'finnhub',
-      // Champs persistés pour recompute P/FCF live (cf. GET /api/watchlist)
-      adjFcfTtm: fhFcfAdj.ttmFcfAdj,
-      sharesOutstanding: fhCapEmp.sharesLatest,
-    };
-  }
-
-  // Path Yahoo : EU purs (NESN.SW, MC.PA…) OU ADRs étrangers (ASML, NSRGY, TSM…)
-  const resolved = await resolveYahooTicker(ticker).catch(() => null);
-  if (resolved) {
-    const yfund = await getYahooFundamentals(resolved.symbol, resolved.price, resolved.currency, resolved.longName ?? null).catch(() => null);
-    if (yfund) {
-      const quant = buildQuantitativeCriteria(yfund.metrics);
-      const evaluable = quant.filter(c => c.valeur !== 'N/A');
-      const pass = evaluable.filter(c => c.statut === 'pass').length;
-      const warn = evaluable.filter(c => c.statut === 'warn').length;
-      // Reconstruction shares + adjFcfTtm depuis le compute Yahoo pour le recompute
-      // P/FCF live. yfund.metrics.marketCap = price × sharesLatest et pfcfTTM = mcap / FCF,
-      // donc on peut isoler chacun par division.
-      const ym = yfund.metrics;
-      const sharesOutstanding = (ym.marketCap != null && ym.price != null && ym.price > 0)
-        ? ym.marketCap / ym.price
-        : null;
-      const adjFcfTtm = (ym.marketCap != null && ym.pfcfTTM != null && ym.pfcfTTM > 0)
-        ? ym.marketCap / ym.pfcfTTM
-        : null;
-      return {
-        ticker,
-        name: resolved.longName ?? ticker,
-        price: yfund.metrics.price,
-        pfcfTTM: yfund.metrics.pfcfTTM,
-        scoreChiffres: pass + Math.round(warn * 0.5),
-        scoreChiffresMax: evaluable.length,
-        currency: yfund.currency,
-        source: 'yahoo',
-        adjFcfTtm, sharesOutstanding,
-      };
-    }
-    return {
-      ticker,
-      name: resolved.longName ?? ticker,
-      price: resolved.price,
+      name: data.company,
+      price: data.metrics.price,
       pfcfTTM: null,
       scoreChiffres: 0,
       scoreChiffresMax: 0,
-      currency: resolved.currency,
-      source: 'yahoo',
+      currency: data.currency,
+      source: data.fundamentalsSource,
     };
   }
 
-  // Ni Finnhub ni Yahoo → snapshot "indisponible" minimal
+  const m = data.metrics;
+  const quant = buildQuantitativeCriteria(m);
+  // Pour le path Yahoo on filtre les N/A (pas tous les critères calculables sans Finnhub)
+  // Pour le path Finnhub on garde tout (10 critères évalués).
+  const evaluable = data.fundamentalsSource === 'yahoo'
+    ? quant.filter(c => c.valeur !== 'N/A')
+    : quant;
+  const pass = evaluable.filter(c => c.statut === 'pass').length;
+  const warn = evaluable.filter(c => c.statut === 'warn').length;
+
+  // Champs internes pour le recompute P/FCF live à chaque GET (cf. enrichWithLivePrice).
+  // - Path Finnhub : adjFcfTtm + sharesLatest viennent directement des fetchs raw.
+  // - Path Yahoo : on déduit shares = marketCap / price et adjFcfTtm = marketCap / pfcfTTM
+  //   depuis les valeurs déjà calculées par getYahooFundamentals.
+  let adjFcfTtm: number | null = null;
+  let sharesOutstanding: number | null = null;
+  if (data.fundamentalsSource === 'finnhub' && data.rawFhFcfAdj && data.rawFhCapEmp) {
+    adjFcfTtm = data.rawFhFcfAdj.ttmFcfAdj;
+    sharesOutstanding = data.rawFhCapEmp.sharesLatest;
+  } else if (data.fundamentalsSource === 'yahoo') {
+    sharesOutstanding = (m.marketCap != null && m.price != null && m.price > 0)
+      ? m.marketCap / m.price : null;
+    adjFcfTtm = (m.marketCap != null && m.pfcfTTM != null && m.pfcfTTM > 0)
+      ? m.marketCap / m.pfcfTTM : null;
+  }
+
   return {
     ticker,
-    name: ticker,
-    price: null,
-    pfcfTTM: null,
-    scoreChiffres: 0,
-    scoreChiffresMax: 0,
-    currency: 'USD',
-    source: null,
+    name: data.company,
+    price: m.price,
+    pfcfTTM: m.pfcfTTM,
+    scoreChiffres: pass + Math.round(warn * 0.5),
+    scoreChiffresMax: evaluable.length,
+    currency: data.currency,
+    source: data.fundamentalsSource,
+    adjFcfTtm,
+    sharesOutstanding,
   };
 }
 

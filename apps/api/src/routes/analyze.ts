@@ -13,19 +13,8 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { AnalyzeResponse, ValoParams, Criterion } from '@lubin/shared';
-import { getMetric, getProfile2, getQuote, getCompanyNews } from '../services/finnhub.js';
-import { getSharesHistory, computeSharesCagr, computeFcfPerShareCagr } from '../services/yahoo.js';
-import {
-  computeFcfPerShareCagrFromQuarterlies,
-  computeRevenueGrowthFromQuarterlies,
-  computeSharesGrowthFromQuarterlies,
-  computeOperatingMarginTrendFromQuarterlies,
-  computeAdjustedFcfTtm,
-  computeCapitalEmployedSnapshot,
-} from '../services/finnhubFundamentals.js';
-import { resolveYahooTicker } from '../services/yahooResolve.js';
-import { getYahooFundamentals } from '../services/yahooFundamentals.js';
-import { getEarningsInfo } from '../services/earnings.js';
+import { getMetric, getQuote } from '../services/finnhub.js';
+import { loadQuantData } from '../services/quantSnapshot.js';
 import { fetchBusinessAnalysis, fetchManagementAnalysis } from '../services/openai.js';
 import { computeDerivedMetrics, buildQuantitativeCriteria, buildPfcfCriterion, buildValuation, filterNews } from '../services/derivedMetrics.js';
 import { prisma } from '../db/client.js';
@@ -56,170 +45,22 @@ function isManagementCacheValid(data: unknown): data is Criterion[] {
 }
 
 /**
- * Helper : récupère les bases nécessaires (metric, profile, quote, shares, earnings)
- * via Finnhub + Yahoo fallback. Renvoie un blob unique utilisable par GET /analyze
- * et POST /analyze/qualitative (qui en a besoin pour reconstruire le contexte).
+ * Wrapper local : convertit "Finnhub complètement vide" en ApiError 503 pour la
+ * route analyze (qui veut retourner une erreur HTTP claire), alors que d'autres
+ * callers (watchlist) gèrent ce cas en silence avec un fallback emptyEntry.
  */
-async function loadQuantData(ticker: string) {
-  const t0 = Date.now();
-  const ms = () => Date.now() - t0;
-
-  const timed = <T>(name: string, p: Promise<T>): Promise<T> => {
-    const start = Date.now();
-    return p.then(
-      r => { console.log(`[analyze ${ticker}] ${name} OK in ${Date.now() - start}ms`); return r; },
-      e => { console.warn(`[analyze ${ticker}] ${name} FAIL in ${Date.now() - start}ms : ${e.message}`); throw e; },
-    );
-  };
-
-  console.log(`[analyze ${ticker}] start`);
-  // 6 sources en parallèle — FMP retiré (redondant : Finnhub profile2 + Yahoo longName suffisent pour le nom de société).
-  const [metric, fhProfile, quote, rawNews, sharesHistory, earnings] = await Promise.all([
-    timed('finnhub metric',    getMetric(ticker)).catch(() => null),
-    timed('finnhub profile2',  getProfile2(ticker)).catch(() => null),
-    timed('finnhub quote',     getQuote(ticker)).catch(() => null),
-    timed('finnhub news',      getCompanyNews(ticker)).catch(() => []),
-    timed('yahoo shares',      getSharesHistory(ticker)).catch(() => null),
-    timed('finnhub earnings',  getEarningsInfo(ticker)).catch(() => ({ next: null, last: null })),
-  ]);
-  console.log(`[analyze ${ticker}] data layer done in ${ms()}ms`);
-
-  const metricEmpty = !metric || !metric.metric || Object.keys(metric.metric).length === 0;
-  if (metricEmpty && !quote) {
+async function loadQuantDataOrThrow(ticker: string) {
+  const data = await loadQuantData(ticker);
+  if (data.finnhubCompletelyEmpty && !data.fundamentalsAvailable) {
     throw new ApiError(
       503,
       'Données fondamentales indisponibles',
       `Finnhub n'a pas répondu pour ${ticker}. Vérifie la clé API ou réessaie dans 1 minute (rate limit).`,
     );
   }
-  const hasPrice = !!quote?.c && quote.c > 0;
-  const hasMetricData = !metricEmpty;
-  const finnhubUsable = hasPrice || hasMetricData;
-
-  let fundamentalsSource: 'finnhub' | 'yahoo' | null = null;
-  let currency = 'USD';
-  let yahooSymbol: string | undefined;
-  let metrics;
-  let companyFromSource: string | null = null;
-
-  if (finnhubUsable) {
-    fundamentalsSource = 'finnhub';
-    // 5 calculs en parallèle via les quarterlies Finnhub :
-    //   - FCF/action 5Y (régression sur TTM FCF_adj / TTM_shares)
-    //   - Croissance CA 5Y (régression sur TTM_revenue)
-    //   - Évolution actions 5Y (régression sur shares quarterly split-adj)
-    //   - Operating leverage (pente du TTM op margin)
-    //   - FCF_adj actuel (CFO_TTM − SBC_TTM + CapEx_TTM) → utilisé pour pfcfTTM, fcfMargin,
-    //     cashROCE, netDebtFcf, ccr — toute la chaîne FCF est désormais SBC-ajustée.
-    const [fhFcfPs, fhRev, fhShares, fhOpLev, fhFcfAdj, fhCapEmp] = await Promise.all([
-      timed('fh fcfPs regress',  computeFcfPerShareCagrFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
-      timed('fh rev regress',    computeRevenueGrowthFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
-      timed('fh shares regress', computeSharesGrowthFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
-      timed('fh opLev regress',  computeOperatingMarginTrendFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
-      timed('fh fcfAdj ttm',     computeAdjustedFcfTtm(ticker)).catch(() => ({ ttmFcfAdj: null as number | null, ttmCfo: null, ttmSbc: null, ttmCapex: null, sbcShareOfFcf: null, asOf: null })),
-      timed('fh capEmp',         computeCapitalEmployedSnapshot(ticker)).catch(() => ({ totalAssets: null as number | null, currentLiabilities: null as number | null, currentAssets: null as number | null, goodwill: null as number | null, equity: null as number | null, totalDebt: null as number | null, totalCash: null as number | null, revenueTtm: null as number | null, netIncomeTtm: null as number | null, sharesLatest: null as number | null, excessCash: null as number | null, formulaUsed: null as 'strict' | 'no-excess-fallback' | 'no-goodwill-fallback' | 'financial-equity' | null, capitalEmployed: null as number | null, asOf: null, reason: 'Erreur fetch capital employé' as string | undefined })),
-    ]);
-
-    // FCF/action : fallback Yahoo si Finnhub quarterly KO (ADRs étrangers)
-    let fcfPsCagrValue = fhFcfPs.value;
-    let fcfPsCagrReason = fhFcfPs.reason;
-    if (fcfPsCagrValue == null) {
-      const yahooResult = computeFcfPerShareCagr(sharesHistory);
-      if (yahooResult.value != null) {
-        fcfPsCagrValue = yahooResult.value;
-        fcfPsCagrReason = undefined;
-      }
-    }
-
-    // Shares growth : fallback Yahoo annual si Finnhub quarterly KO
-    let sharesCagrValue = fhShares.value;
-    let sharesCagrReason = fhShares.reason;
-    if (sharesCagrValue == null) {
-      const yahooShareCagr = computeSharesCagr(sharesHistory);
-      if (yahooShareCagr != null) {
-        sharesCagrValue = yahooShareCagr;
-        sharesCagrReason = undefined;
-      }
-    }
-
-    // ADRs étrangers (ASML, NSRGY, TSM…) : Finnhub /stock/metric expose des ratios
-    // précomputed mais /financials-reported renvoie 0 filing (les boîtes filent du
-    // 20-F annuel à la SEC, pas du 10-Q). Symptôme : fhFcfAdj et fhCapEmp sont tous
-    // les deux null. → bascule sur Yahoo annual pour les fondamentaux (cohérent avec
-    // les tickers EU purs).
-    const finnhubFinancialsEmpty = fhFcfAdj.ttmFcfAdj == null && fhCapEmp.capitalEmployed == null;
-    if (finnhubFinancialsEmpty) {
-      console.log(`[analyze ${ticker}] Finnhub /financials-reported vide (probable ADR étranger) → bascule Yahoo annual pour les fondamentaux`);
-      const resolved = await timed('yahoo resolve', resolveYahooTicker(ticker)).catch(() => null);
-      if (resolved) {
-        yahooSymbol = resolved.symbol;
-        currency = resolved.currency;
-        companyFromSource = resolved.longName ?? null;
-        const yfund = await timed('yahoo fundamentals (ADR)', getYahooFundamentals(resolved.symbol, resolved.price, resolved.currency, resolved.longName ?? null)).catch(() => null);
-        if (yfund) {
-          fundamentalsSource = 'yahoo';
-          metrics = yfund.metrics;
-        }
-      }
-    }
-
-    if (!metrics) {
-      metrics = computeDerivedMetrics({
-        metric, profile: fhProfile, quote,
-        yahooShareCagr: sharesCagrValue,
-        yahooFcfPerShareCagr: fcfPsCagrValue,
-        yahooFcfPerShareCagrReason: fcfPsCagrReason,
-        revenueGrowthOverride: fhRev.value,
-        revenueGrowthOverrideReason: fhRev.reason,
-        sharesGrowthReason: sharesCagrReason,
-        opMarginTrend: fhOpLev.value,
-        opMarginTrendReason: fhOpLev.reason,
-        // FCF_adj (TTM CFO − SBC + CapEx) — utilisé pour pfcfTTM, fcfMargin, cashROCE,
-        // netDebtFcf, ccr. Si null, on retombe sur les ratios précomputed Finnhub bruts.
-        adjFcfTtm: fhFcfAdj.ttmFcfAdj,
-        sbcShareOfFcf: fhFcfAdj.sbcShareOfFcf,
-        // Capital employé Bettin/Mauboussin (snapshot dernier Q) → dénominateur Cash ROCE.
-        capitalEmployed: fhCapEmp.capitalEmployed,
-        capitalEmployedReason: fhCapEmp.reason,
-        capitalEmployedFormula: fhCapEmp.formulaUsed,
-        // Fallbacks robustesse pour quand /stock/metric flake (BKNG cas constaté).
-        // Ces 7 champs viennent du même fetch CapitalEmployedSnapshot — pas de surcoût.
-        revenueTtm: fhCapEmp.revenueTtm,
-        netIncomeTtm: fhCapEmp.netIncomeTtm,
-        sharesLatest: fhCapEmp.sharesLatest,
-        currentAssetsSnapshot: fhCapEmp.currentAssets,
-        currentLiabilitiesSnapshot: fhCapEmp.currentLiabilities,
-        totalDebtSnapshot: fhCapEmp.totalDebt,
-        totalCashSnapshot: fhCapEmp.totalCash,
-      });
-    }
-  } else {
-    console.log(`[analyze ${ticker}] Finnhub vide → fallback Yahoo`);
-    const resolved = await timed('yahoo resolve', resolveYahooTicker(ticker)).catch(() => null);
-    if (resolved) {
-      yahooSymbol = resolved.symbol;
-      currency = resolved.currency;
-      companyFromSource = resolved.longName ?? null;
-      const yfund = await timed('yahoo fundamentals', getYahooFundamentals(resolved.symbol, resolved.price, resolved.currency, resolved.longName ?? null)).catch(() => null);
-      if (yfund) {
-        fundamentalsSource = 'yahoo';
-        metrics = yfund.metrics;
-      } else {
-        metrics = computeDerivedMetrics({ metric, profile: fhProfile, quote, yahooShareCagr: null, yahooFcfPerShareCagr: null });
-      }
-    } else {
-      metrics = computeDerivedMetrics({ metric, profile: fhProfile, quote, yahooShareCagr: null, yahooFcfPerShareCagr: null });
-    }
-  }
-
-  const fundamentalsAvailable = fundamentalsSource !== null;
-  const company = companyFromSource ?? fhProfile?.name ?? ticker;
-
-  return {
-    metrics, company, fundamentalsAvailable, fundamentalsSource, currency, yahooSymbol,
-    rawNews, earnings,
-  };
+  return data;
 }
+
 
 /**
  * Construit la réponse AnalyzeResponse à partir du quant + des qualitatives (optionnels).
@@ -308,7 +149,7 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
   if (!parse.success) throw new ApiError(400, 'ticker invalide', parse.error.flatten());
   const ticker = parse.data;
 
-  const quant = await loadQuantData(ticker);
+  const quant = await loadQuantDataOrThrow(ticker);
 
   // Lecture des 2 caches qualitatifs en parallèle (gratuit, pas d'API call GPT)
   const [businessRow, managementRow] = await Promise.all([
@@ -339,7 +180,7 @@ analyzeRouter.post('/qualitative', analyzeLimiter, asyncHandler(async (req: Requ
   if (!parse.success) throw new ApiError(400, 'ticker invalide');
   const ticker = parse.data;
 
-  const quant = await loadQuantData(ticker);
+  const quant = await loadQuantDataOrThrow(ticker);
   const company = quant.company;
   const chiffres = buildQuantitativeCriteria(quant.metrics);
   const chiffresContext = chiffres.map(c => ({ nom: c.nom, valeur: c.valeur, statut: c.statut }));
@@ -408,7 +249,7 @@ analyzeRouter.post('/refresh-management', analyzeLimiter, asyncHandler(async (re
   if (!parse.success) throw new ApiError(400, 'ticker invalide');
   const ticker = parse.data;
 
-  const quant = await loadQuantData(ticker);
+  const quant = await loadQuantDataOrThrow(ticker);
   const chiffres = buildQuantitativeCriteria(quant.metrics);
   const chiffresContext = chiffres.map(c => ({ nom: c.nom, valeur: c.valeur, statut: c.statut }));
 
