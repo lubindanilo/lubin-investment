@@ -101,6 +101,19 @@ const CashRoceGuide = (): ReactNode => (
       C'est la formule Bettin / Mauboussin classique. La carte critère mentionne explicitement quand le fallback est utilisé — pas de fallback caché.
     </p>
 
+    <h3 className="info-section-title">Fallback "Buffett classique" (goodwill inclus)</h3>
+    <p className="info-para">
+      Pour les boîtes <strong>asset-light sur-acquisitives</strong> (Medpace MEDP, certains rouleurs de services health/IT…), le goodwill au bilan peut <em>dépasser</em> le capital tangible net. Soustraire le goodwill rendrait alors le dénominateur négatif. Dans ce cas, on retombe sur la formule Buffett classique <strong>incluant le goodwill</strong> :
+    </p>
+    <div className="info-formula">
+      <code>
+        Cash ROCE (Buffett) = FCF ajusté SBC ÷ (Total Assets − Current Liabilities)
+      </code>
+    </div>
+    <p className="info-para">
+      Justification : le goodwill représente du capital <em>réellement payé</em> via M&A (en cash ou en actions). Quand la version "tangible" n'est plus calculable mathématiquement, traiter le goodwill comme du capital normal reste défendable — c'est la version la plus simple de l'ROCE selon Buffett lui-même.
+    </p>
+
     <h3 className="info-section-title">Fallback "secteur financier"</h3>
     <p className="info-para">
       Les compagnies d'assurance et les banques (KNSL, BRK, JPM, MA partiellement…) publient un bilan <strong>unclassified</strong> — pas de séparation entre <em>current</em> et <em>non-current liabilities</em>. Leurs gros passifs sont des réserves de sinistres et des primes non gagnées (= "float", équivalent du deferred revenue d'Amazon : c'est du financement gratuit à long terme, pas du capital rémunéré).

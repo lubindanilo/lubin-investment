@@ -245,7 +245,7 @@ export async function getYahooFundamentals(
       const latestDebt = latest(totalDebt);
       const latestCash = latest(cash);
       let cashROCE: number | null = null;
-      let cashROCEFormula: 'strict' | 'no-excess-fallback' | 'financial-equity' | null = null;
+      let cashROCEFormula: 'strict' | 'no-excess-fallback' | 'no-goodwill-fallback' | 'financial-equity' | null = null;
       if (!latestFcf) reasons.cashROCE = 'FCF indisponible';
       else if (latestFcf.value <= 0) reasons.cashROCE = 'FCF négatif sur le dernier exercice';
       else if (!latestAssets) reasons.cashROCE = 'Total Assets indisponible';
@@ -280,7 +280,16 @@ export async function getYahooFundamentals(
               cashROCE = latestFcf.value / ceNoExcess;
               cashROCEFormula = 'no-excess-fallback';
             } else {
-              reasons.cashROCE = `Capital employé nul ou négatif même sans excess cash (assets ${(latestAssets.value / 1e9).toFixed(2)}B − curLiab ${(latestCurLiab.value / 1e9).toFixed(2)}B − goodwill ${(goodwillVal / 1e9).toFixed(2)}B) — sur-acquisition`;
+              // Dernier recours : Buffett classique = Assets − CurLiab (goodwill inclus).
+              // Boîtes asset-light sur-acquisitives où le goodwill dépasse le tangible net.
+              // Critique pour les EU/ADR qui passent OBLIGATOIREMENT par Yahoo.
+              const ceNoGoodwill = latestAssets.value - latestCurLiab.value;
+              if (ceNoGoodwill > 0) {
+                cashROCE = latestFcf.value / ceNoGoodwill;
+                cashROCEFormula = 'no-goodwill-fallback';
+              } else {
+                reasons.cashROCE = `Capital employé nul ou négatif même goodwill inclus (assets ${(latestAssets.value / 1e9).toFixed(2)}B − curLiab ${(latestCurLiab.value / 1e9).toFixed(2)}B = ${(ceNoGoodwill / 1e9).toFixed(2)}B) — situation anormale`;
+              }
             }
           }
         }

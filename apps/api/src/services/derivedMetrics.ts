@@ -52,7 +52,7 @@ export function computeDerivedMetrics(input: {
   /** Raison explicite quand capitalEmployed est null (equity négatif > debt, données manquantes…) */
   capitalEmployedReason?: string;
   /** Variante de formule effectivement appliquée par le snapshot — propagé tel quel à la sortie */
-  capitalEmployedFormula?: 'strict' | 'no-excess-fallback' | 'financial-equity' | null;
+  capitalEmployedFormula?: 'strict' | 'no-excess-fallback' | 'no-goodwill-fallback' | 'financial-equity' | null;
   // ─── Fallbacks /financials-reported quand /stock/metric flake ─────────────
   // Ces champs sont peuplés à partir de la même fetch CapitalEmployedSnapshot.
   // Ils ne sont utilisés que si /stock/metric ne donne pas le ratio précomputed
@@ -173,7 +173,7 @@ export function computeDerivedMetrics(input: {
   // a déjà choisi la formule à appliquer via `capitalEmployedFormula`.
   let cashROCE: number | null = null;
   let cashROCEReason: string | undefined;
-  const cashROCEFormula: 'strict' | 'no-excess-fallback' | 'financial-equity' | null = input.capitalEmployedFormula ?? null;
+  const cashROCEFormula: 'strict' | 'no-excess-fallback' | 'no-goodwill-fallback' | 'financial-equity' | null = input.capitalEmployedFormula ?? null;
   if (input.adjFcfTtm == null || input.adjFcfTtm <= 0) {
     cashROCEReason = input.adjFcfTtm == null
       ? 'FCF ajusté TTM indisponible'
@@ -182,9 +182,9 @@ export function computeDerivedMetrics(input: {
     cashROCEReason = input.capitalEmployedReason ?? 'Capital employé indisponible';
   } else {
     cashROCE = input.adjFcfTtm / input.capitalEmployed;
-    // Si un fallback (no-excess ou financial-equity) est appliqué, on expose la raison
-    // même quand cashROCE est calculé — la carte UI affichera la formule réellement utilisée.
-    if ((cashROCEFormula === 'no-excess-fallback' || cashROCEFormula === 'financial-equity') && input.capitalEmployedReason) {
+    // Si un fallback (no-excess, no-goodwill ou financial-equity) est appliqué, on expose
+    // la raison même quand cashROCE est calculé — la carte UI affichera la formule réellement utilisée.
+    if (cashROCEFormula !== 'strict' && cashROCEFormula != null && input.capitalEmployedReason) {
       cashROCEReason = input.capitalEmployedReason;
     }
   }
@@ -394,8 +394,9 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
       // modale info (icône ⓘ sur la carte), pas dans le texte de la carte.
       const variant = m.cashROCEFormula;
       const fallbackNote =
-        variant === 'no-excess-fallback'  ? ' (calcul fallback ultra-cash-rich — voir ⓘ)' :
-        variant === 'financial-equity'    ? ' (formule secteur financier — voir ⓘ)' :
+        variant === 'no-excess-fallback'   ? ' (calcul fallback ultra-cash-rich — voir ⓘ)' :
+        variant === 'no-goodwill-fallback' ? ' (formule Buffett goodwill inclus — voir ⓘ)' :
+        variant === 'financial-equity'     ? ' (formule secteur financier — voir ⓘ)' :
         '';
       const verdict = m.cashROCE == null
         ? reasonOr(m, 'cashROCE', 'Donnée indisponible')

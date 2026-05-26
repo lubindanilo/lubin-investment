@@ -699,9 +699,10 @@ export interface CapitalEmployedSnapshot {
   /** Formule effectivement appliquée :
    *  - 'strict' : CE = Assets − CurLiab − Goodwill − ExcessCash (formule complète)
    *  - 'no-excess-fallback' : CE = Assets − CurLiab − Goodwill (ultra-cash-rich)
+   *  - 'no-goodwill-fallback' : CE = Assets − CurLiab (sur-acquisitive asset-light : MEDP-style)
    *  - 'financial-equity' : CE = Equity + LT Debt − Goodwill (assureurs/banques, bilan unclassified)
    *  Null si CE indispo. */
-  formulaUsed: 'strict' | 'no-excess-fallback' | 'financial-equity' | null;
+  formulaUsed: 'strict' | 'no-excess-fallback' | 'no-goodwill-fallback' | 'financial-equity' | null;
   /** Capital employé final utilisé ; null si non calculable même avec fallback */
   capitalEmployed: number | null;
   /** Date du dernier quarter dispo */
@@ -807,9 +808,21 @@ export async function computeCapitalEmployedSnapshot(ticker: string): Promise<Ca
       reason: `Fallback : cash excédentaire (${(excessCash / 1e9).toFixed(2)}B) > capital opérationnel net — formule sans soustraction d'excess (Bettin/Mauboussin classique)`,
     };
   }
+  // Sans excess ET sans goodwill : Buffett classique = CE = Assets − CurLiab.
+  // Pour les boîtes asset-light sur-acquisitives (MEDP, certains rouleurs de services
+  // health/IT) où le goodwill dépasse le tangible net capital, on inclut le goodwill
+  // car c'est du capital réellement payé via M&A. La ROCE résultante traite le
+  // goodwill comme du capital normal.
+  const ceNoGoodwill = totalAssets - currentLiabilities;
+  if (ceNoGoodwill > 0) {
+    return {
+      ...baseFields, formulaUsed: 'no-goodwill-fallback', capitalEmployed: ceNoGoodwill, asOf,
+      reason: `Fallback : goodwill (${(goodwill / 1e9).toFixed(2)}B) > capital tangible net — formule incluant le goodwill dans le capital employé (Buffett classique)`,
+    };
+  }
   return {
     ...baseFields, formulaUsed: null, capitalEmployed: null, asOf,
-    reason: `Capital employé nul ou négatif même sans excess cash (assets ${(totalAssets / 1e9).toFixed(2)}B − curLiab ${(currentLiabilities / 1e9).toFixed(2)}B − goodwill ${(goodwill / 1e9).toFixed(2)}B) — sur-acquisition`,
+    reason: `Capital employé nul ou négatif même goodwill inclus (assets ${(totalAssets / 1e9).toFixed(2)}B − curLiab ${(currentLiabilities / 1e9).toFixed(2)}B = ${(ceNoGoodwill / 1e9).toFixed(2)}B) — passifs courants dépassent les actifs totaux, situation anormale`,
   };
 }
 
@@ -922,7 +935,7 @@ export async function getCapitalEmployedSeries(ticker: string, windowYears: numb
       continue;
     }
 
-    // Formule standard avec fallback ultra-cash-rich
+    // Formule standard avec fallback chain : strict → no-excess → no-goodwill
     const cash = cashByDate.get(p.date) ?? 0;
     const revTtm = revenueTtmByDate.get(p.date) ?? null;
     const excess = computeExcessCash(cash, revTtm);
@@ -934,6 +947,12 @@ export async function getCapitalEmployedSeries(ticker: string, windowYears: numb
     const ceNoExcess = p.value - curLiab - goodwill;
     if (ceNoExcess > 0) {
       out.push({ date: p.date, value: ceNoExcess });
+      continue;
+    }
+    // Dernier recours : Buffett classique avec goodwill inclus (boîtes sur-acquisitives)
+    const ceNoGoodwill = p.value - curLiab;
+    if (ceNoGoodwill > 0) {
+      out.push({ date: p.date, value: ceNoGoodwill });
     }
   }
   return out;

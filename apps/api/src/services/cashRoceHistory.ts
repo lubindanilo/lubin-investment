@@ -174,7 +174,7 @@ async function getCashRoceHistoryAnnualYahoo(yahooSymbol: string, years: number)
       if (ceFinancial <= 0) continue;
       ce = ceFinancial;
     } else {
-      // Formule standard avec fallback ultra-cash-rich
+      // Formule standard avec fallback chain : strict → no-excess → no-goodwill
       const ch = cashByYear.get(yr) ?? 0;
       const rev = revenueByYear.get(yr) ?? null;
       const excess = computeExcessCash(ch, rev);
@@ -183,8 +183,14 @@ async function getCashRoceHistoryAnnualYahoo(yahooSymbol: string, years: number)
         ce = ceStrict;
       } else {
         const ceNoExcess = a - cl - gw;
-        if (ceNoExcess <= 0) continue;
-        ce = ceNoExcess;
+        if (ceNoExcess > 0) {
+          ce = ceNoExcess;
+        } else {
+          // Dernier recours : Buffett classique avec goodwill inclus (MEDP-style)
+          const ceNoGoodwill = a - cl;
+          if (ceNoGoodwill <= 0) continue;
+          ce = ceNoGoodwill;
+        }
       }
     }
     const ratio = p.value / ce;

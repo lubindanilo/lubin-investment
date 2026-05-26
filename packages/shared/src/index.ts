@@ -39,11 +39,16 @@ export interface DerivedMetrics {
    *  - 'strict' : FCF / (Assets − CurLiab − Goodwill − ExcessCash) — formule complète Damodaran
    *  - 'no-excess-fallback' : FCF / (Assets − CurLiab − Goodwill) — fallback pour boîtes
    *    ultra-cash-rich (cash excédentaire > capital op net). Bettin/Mauboussin classique.
+   *  - 'no-goodwill-fallback' : FCF / (Assets − CurLiab) — Buffett classique incluant le
+   *    goodwill, pour boîtes asset-light sur-acquisitives (MEDP-style) où le goodwill
+   *    dépasse le capital tangible net. Le goodwill représente du capital réellement
+   *    payé via M&A, défendable de l'inclure quand la version "tangible" n'est plus
+   *    calculable.
    *  - 'financial-equity' : FCF / (Equity + LT Debt − Goodwill) — fallback secteur financier
    *    (assureurs, banques) où le bilan est unclassified (pas de Current Liabilities séparé).
    *  - null si cashROCE n'est pas calculable du tout
    */
-  cashROCEFormula?: 'strict' | 'no-excess-fallback' | 'financial-equity' | null;
+  cashROCEFormula?: 'strict' | 'no-excess-fallback' | 'no-goodwill-fallback' | 'financial-equity' | null;
   netDebtFcf: number | null;
   ccr: number | null;
   nwc: number | null;
