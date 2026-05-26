@@ -117,7 +117,7 @@ async function loadQuantData(ticker: string) {
       timed('fh shares regress', computeSharesGrowthFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh opLev regress',  computeOperatingMarginTrendFromQuarterlies(ticker, 5)).catch(() => ({ value: null as number | null, reason: 'Erreur calcul' as string | undefined })),
       timed('fh fcfAdj ttm',     computeAdjustedFcfTtm(ticker)).catch(() => ({ ttmFcfAdj: null as number | null, ttmCfo: null, ttmSbc: null, ttmCapex: null, sbcShareOfFcf: null, asOf: null })),
-      timed('fh capEmp',         computeCapitalEmployedSnapshot(ticker)).catch(() => ({ totalAssets: null as number | null, currentLiabilities: null as number | null, goodwill: null as number | null, equity: null as number | null, totalDebt: null as number | null, totalCash: null as number | null, revenueTtm: null as number | null, excessCash: null as number | null, formulaUsed: null as 'strict' | 'no-excess-fallback' | 'financial-equity' | null, capitalEmployed: null as number | null, asOf: null, reason: 'Erreur fetch capital employé' as string | undefined })),
+      timed('fh capEmp',         computeCapitalEmployedSnapshot(ticker)).catch(() => ({ totalAssets: null as number | null, currentLiabilities: null as number | null, currentAssets: null as number | null, goodwill: null as number | null, equity: null as number | null, totalDebt: null as number | null, totalCash: null as number | null, revenueTtm: null as number | null, netIncomeTtm: null as number | null, sharesLatest: null as number | null, excessCash: null as number | null, formulaUsed: null as 'strict' | 'no-excess-fallback' | 'financial-equity' | null, capitalEmployed: null as number | null, asOf: null, reason: 'Erreur fetch capital employé' as string | undefined })),
     ]);
 
     // FCF/action : fallback Yahoo si Finnhub quarterly KO (ADRs étrangers)
@@ -182,6 +182,15 @@ async function loadQuantData(ticker: string) {
         capitalEmployed: fhCapEmp.capitalEmployed,
         capitalEmployedReason: fhCapEmp.reason,
         capitalEmployedFormula: fhCapEmp.formulaUsed,
+        // Fallbacks robustesse pour quand /stock/metric flake (BKNG cas constaté).
+        // Ces 7 champs viennent du même fetch CapitalEmployedSnapshot — pas de surcoût.
+        revenueTtm: fhCapEmp.revenueTtm,
+        netIncomeTtm: fhCapEmp.netIncomeTtm,
+        sharesLatest: fhCapEmp.sharesLatest,
+        currentAssetsSnapshot: fhCapEmp.currentAssets,
+        currentLiabilitiesSnapshot: fhCapEmp.currentLiabilities,
+        totalDebtSnapshot: fhCapEmp.totalDebt,
+        totalCashSnapshot: fhCapEmp.totalCash,
       });
     }
   } else {

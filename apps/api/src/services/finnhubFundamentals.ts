@@ -180,6 +180,15 @@ export const METRICS: Record<string, MetricConfig> = {
     cumulative: false,
   },
   /**
+   * Current Assets — utilisé pour calculer le current ratio (CA / CL) en fallback
+   * quand Finnhub /stock/metric ne renvoie pas currentRatioAnnual.
+   */
+  currentAssets: {
+    section: 'bs',
+    concepts: ['us-gaap_AssetsCurrent'],
+    cumulative: false,
+  },
+  /**
    * Goodwill — soustrait du capital employé. Les primes d'acquisitions traînent au
    * bilan mais ne sont pas du capital productif. Permet de mesurer le retour sur le
    * capital ORGANIQUE (vs acquisitif).
@@ -670,14 +679,21 @@ export interface AdjustedFcfResult {
 export interface CapitalEmployedSnapshot {
   totalAssets: number | null;
   currentLiabilities: number | null;
+  /** Current Assets snapshot dernier Q — pour fallback nwcCurrentRatio si /stock/metric absent */
+  currentAssets: number | null;
   goodwill: number | null;
   equity: number | null;
   /** Total debt (LT + ST + leases) au dernier quarter — utilisé par le fallback financier */
   totalDebt: number | null;
   /** Cash total (cash + STI) au dernier quarter */
   totalCash: number | null;
-  /** Revenue TTM (somme des 4 derniers Q) — utilisé pour estimer le cash opérationnel */
+  /** Revenue TTM (somme des 4 derniers Q) — utilisé pour estimer le cash opérationnel
+   *  ET comme dénominateur fallback pour netMargin / fcfMargin */
   revenueTtm: number | null;
+  /** Net Income TTM (somme des 4 derniers Q décumulés) — pour fallback netMargin / ccr */
+  netIncomeTtm: number | null;
+  /** Shares outstanding (point-in-time, dernier Q, split-adjusted) — pour fallback mcap = price × shares */
+  sharesLatest: number | null;
   /** Cash excédentaire théorique = max(0, totalCash − 2% × revenueTtm) */
   excessCash: number | null;
   /** Formule effectivement appliquée :
@@ -695,37 +711,51 @@ export interface CapitalEmployedSnapshot {
 }
 
 export async function computeCapitalEmployedSnapshot(ticker: string): Promise<CapitalEmployedSnapshot> {
-  const [assetsQ, curLiabQ, goodwillQ, cashQ, revenueQ, equityQ, debtQ] = await Promise.all([
+  const [assetsQ, curLiabQ, curAssetsQ, goodwillQ, cashQ, revenueQ, equityQ, debtQ, netIncomeQ, sharesQ] = await Promise.all([
     getReportedTimeseries(ticker, 'totalAssets', 'quarterly', 2),
     getReportedTimeseries(ticker, 'currentLiabilities', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'currentAssets', 'quarterly', 2),
     getReportedTimeseries(ticker, 'goodwill', 'quarterly', 2),
     getReportedTimeseries(ticker, 'cashAndEquivalents', 'quarterly', 2),
     getReportedTimeseries(ticker, 'revenue', 'quarterly', 2),
     getReportedTimeseries(ticker, 'equity', 'quarterly', 2),
     getReportedTimeseries(ticker, 'totalDebt', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'netIncome', 'quarterly', 2),
+    getReportedTimeseries(ticker, 'shares', 'quarterly', 2),
   ]);
   const lastAssets = assetsQ[assetsQ.length - 1];
   const lastCurLiab = curLiabQ[curLiabQ.length - 1];
+  const lastCurAssets = curAssetsQ[curAssetsQ.length - 1];
   const lastGoodwill = goodwillQ[goodwillQ.length - 1];
   const lastCash = cashQ[cashQ.length - 1];
   const lastEquity = equityQ[equityQ.length - 1];
   const lastDebt = debtQ[debtQ.length - 1];
+  const lastShares = sharesQ[sharesQ.length - 1];
   const totalAssets = lastAssets?.value ?? null;
   const currentLiabilities = lastCurLiab?.value ?? null;
+  const currentAssets = lastCurAssets?.value ?? null;
   const goodwill = lastGoodwill?.value ?? 0;
   const totalCash = lastCash?.value ?? 0;
   const equity = lastEquity?.value ?? null;
   const totalDebt = lastDebt?.value ?? 0;
+  const sharesLatest = lastShares?.value ?? null;
+  // TTM revenue + netIncome : sommes des 4 derniers Q (décumulés par getReportedTimeseries).
+  // Si <4 Q dispos → null (on ne fait pas de TTM partiel qui ferait des ratios faux).
   const revenueSorted = [...revenueQ].sort((a, b) => a.date.localeCompare(b.date));
   const last4Rev = revenueSorted.slice(-4);
   const revenueTtm = last4Rev.length === 4 ? last4Rev.reduce((s, p) => s + p.value, 0) : null;
+  const netIncomeSorted = [...netIncomeQ].sort((a, b) => a.date.localeCompare(b.date));
+  const last4NI = netIncomeSorted.slice(-4);
+  const netIncomeTtm = last4NI.length === 4 ? last4NI.reduce((s, p) => s + p.value, 0) : null;
   const excessCash = computeExcessCash(totalCash, revenueTtm);
   const asOf = lastAssets?.date ?? lastCurLiab?.date ?? lastEquity?.date ?? null;
 
   const baseFields = {
-    totalAssets, currentLiabilities, goodwill: lastGoodwill?.value ?? null,
+    totalAssets, currentLiabilities, currentAssets,
+    goodwill: lastGoodwill?.value ?? null,
     equity, totalDebt: lastDebt?.value ?? null,
-    totalCash: lastCash?.value ?? null, revenueTtm, excessCash,
+    totalCash: lastCash?.value ?? null,
+    revenueTtm, netIncomeTtm, sharesLatest, excessCash,
   };
 
   if (totalAssets == null) {

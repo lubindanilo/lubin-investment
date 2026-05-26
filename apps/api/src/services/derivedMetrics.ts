@@ -53,6 +53,25 @@ export function computeDerivedMetrics(input: {
   capitalEmployedReason?: string;
   /** Variante de formule effectivement appliquée par le snapshot — propagé tel quel à la sortie */
   capitalEmployedFormula?: 'strict' | 'no-excess-fallback' | 'financial-equity' | null;
+  // ─── Fallbacks /financials-reported quand /stock/metric flake ─────────────
+  // Ces champs sont peuplés à partir de la même fetch CapitalEmployedSnapshot.
+  // Ils ne sont utilisés que si /stock/metric ne donne pas le ratio précomputed
+  // équivalent — c'est-à-dire que tant que Finnhub /stock/metric répond bien,
+  // les valeurs affichées sont IDENTIQUES à avant (Finnhub précomputed gagne).
+  /** Revenue TTM brut (somme des 4 derniers Q décumulés) — fallback pour netMargin + fcfMargin */
+  revenueTtm?: number | null;
+  /** Net Income TTM (somme des 4 derniers Q) — fallback pour netMargin + ccr */
+  netIncomeTtm?: number | null;
+  /** Shares outstanding (latest Q, split-adjusté) — fallback pour mcap = price × shares */
+  sharesLatest?: number | null;
+  /** Current Assets (latest Q) — fallback pour current ratio = CA / CL */
+  currentAssetsSnapshot?: number | null;
+  /** Current Liabilities (latest Q) — fallback pour current ratio = CA / CL */
+  currentLiabilitiesSnapshot?: number | null;
+  /** Total Debt (latest Q) — fallback pour netDebtFcf = (debt − cash) / FCF */
+  totalDebtSnapshot?: number | null;
+  /** Total Cash (latest Q) — fallback pour netDebtFcf */
+  totalCashSnapshot?: number | null;
 }): DerivedMetrics {
   const m = input.metric?.metric ?? {};
   const price = input.quote?.c ?? null;
@@ -97,18 +116,28 @@ export function computeDerivedMetrics(input: {
   // les valeurs Finnhub précomputed (FCF brut, non ajusté).
   //   pfcfTTM_adj = market_cap / FCF_adj_TTM
   //   fcfMargin_adj = FCF_adj_TTM / revenue_TTM
-  const mcap = val('marketCapitalization');
+  //
+  // Fallback robustesse : mcap peut être absent de /stock/metric si Finnhub flake.
+  // On le reconstruit alors via price × sharesLatest (financials-reported, split-adj).
+  let mcap = val('marketCapitalization');
+  let mcapSource: 'finnhub-metric' | 'financials-reported' = 'finnhub-metric';
+  if ((mcap == null || mcap <= 0) && price != null && price > 0 && input.sharesLatest != null && input.sharesLatest > 0) {
+    // sharesLatest est en valeur absolue (count), price en $/action.
+    // mcap final dans `marketCapitalization` est en millions chez Finnhub → on stocke dans la même unité.
+    mcap = (price * input.sharesLatest) / 1_000_000;
+    mcapSource = 'financials-reported';
+  }
   const rps = val('revenuePerShareTTM');
   let pfcfTTM: number | null = null;
   let fcfMargin: number | null = null;
   if (input.adjFcfTtm != null && input.adjFcfTtm > 0 && mcap != null && mcap > 0) {
-    // Conversion : mcap est en millions USD chez Finnhub, FCF_adj est en USD bruts
     const mcapAbsolute = mcap * 1_000_000;
     pfcfTTM = mcapAbsolute / input.adjFcfTtm;
-    // Revenue TTM = revenuePerShareTTM × shares ; mcap / pfcf_brut = FCF brut
-    // mais on a déjà le revenu via rps : revenue = rps × shares_outstanding
-    // shares_outstanding ≈ mcap_abs / price
-    if (price != null && price > 0 && rps != null && rps > 0) {
+    // Marge FCF — préfère le revenueTtm direct de /financials-reported, fallback sur la
+    // dérivation revenuePerShareTTM × shares de /stock/metric (le code original).
+    if (input.revenueTtm != null && input.revenueTtm > 0) {
+      fcfMargin = input.adjFcfTtm / input.revenueTtm;
+    } else if (price != null && price > 0 && rps != null && rps > 0) {
       const sharesAbs = mcapAbsolute / price;
       const revenueAbs = rps * sharesAbs;
       if (revenueAbs > 0) fcfMargin = input.adjFcfTtm / revenueAbs;
@@ -122,6 +151,7 @@ export function computeDerivedMetrics(input: {
       fcfMargin = pct('netProfitMargin5Y');
     }
   }
+  void mcapSource; // garde la variable pour debug futur
 
   // Operating leverage : tendance de la marge op TTM par régression (au lieu du proxy
   // margin_TTM vs margin_5Y_mean qui était sensible aux outliers).
@@ -159,36 +189,60 @@ export function computeDerivedMetrics(input: {
     }
   }
 
-  // Net Debt / FCF : (EV - mcap) / FCF_adj (si dispo) sinon FCF brut
+  // Net Debt / FCF : (EV - mcap) / FCF_adj. Source primaire : Finnhub /stock/metric.
+  // Fallback : (totalDebt − totalCash) / adjFcfTtm depuis le snapshot (/financials-reported).
   const ev = val('enterpriseValue');
   let netDebtFcf: number | null = null;
   if (ev != null && mcap != null) {
-    const netDebtAbsolute = (ev - mcap) * 1_000_000; // EV et mcap en M$
+    const netDebtAbsolute = (ev - mcap) * 1_000_000;
     const fcfToUse = input.adjFcfTtm ?? (pfcfTTM != null && pfcfTTM > 0 ? (mcap * 1_000_000) / pfcfTTM : null);
     if (fcfToUse != null && fcfToUse > 0) {
       netDebtFcf = netDebtAbsolute / fcfToUse;
     }
+  } else if (input.adjFcfTtm != null && input.adjFcfTtm > 0
+          && input.totalDebtSnapshot != null && input.totalCashSnapshot != null) {
+    // Fallback /financials-reported : netDebt = totalDebt - totalCash (en USD bruts)
+    const netDebtAbsolute = input.totalDebtSnapshot - input.totalCashSnapshot;
+    netDebtFcf = netDebtAbsolute / input.adjFcfTtm;
   }
 
-  // Cash Conversion Rate : FCF_adj / Net Income. Si FCF_adj indispo, fallback proxy peTTM/pfcfTTM
+  // Cash Conversion Rate : FCF_adj / Net Income. Source primaire : Finnhub peTTM × mcap.
+  // Fallback : netIncomeTtm direct depuis /financials-reported.
   let ccr: number | null = null;
   if (input.adjFcfTtm != null && input.adjFcfTtm > 0) {
-    // Net Income TTM = mcap / peTTM (approximé)
     const peTTM = val('peTTM');
     if (peTTM != null && peTTM > 0 && mcap != null && mcap > 0) {
-      const netIncomeTtm = (mcap * 1_000_000) / peTTM;
-      if (netIncomeTtm > 0) ccr = input.adjFcfTtm / netIncomeTtm;
+      const netIncomeTtmFromPe = (mcap * 1_000_000) / peTTM;
+      if (netIncomeTtmFromPe > 0) ccr = input.adjFcfTtm / netIncomeTtmFromPe;
+    }
+    // Fallback : netIncomeTtm direct si peTTM ou mcap manquent
+    if (ccr == null && input.netIncomeTtm != null && input.netIncomeTtm > 0) {
+      ccr = input.adjFcfTtm / input.netIncomeTtm;
     }
   } else {
     const peTTM = val('peTTM');
     if (peTTM != null && pfcfTTM != null && pfcfTTM > 0) ccr = peTTM / pfcfTTM;
   }
 
-  // NWC : on a juste le current ratio annuel en free tier → on en déduit le signe
-  const currentRatio = val('currentRatioAnnual');
-  const nwc = currentRatio != null ? (currentRatio < 1 ? -1 : 1) : null; // marqueur sign
+  // NWC : current ratio = CA / CL. Source primaire : Finnhub currentRatioAnnual.
+  // Fallback : currentAssets / currentLiabilities depuis le snapshot /financials-reported.
+  let currentRatio = val('currentRatioAnnual');
+  if (currentRatio == null
+      && input.currentAssetsSnapshot != null
+      && input.currentLiabilitiesSnapshot != null
+      && input.currentLiabilitiesSnapshot > 0) {
+    currentRatio = input.currentAssetsSnapshot / input.currentLiabilitiesSnapshot;
+  }
+  const nwc = currentRatio != null ? (currentRatio < 1 ? -1 : 1) : null;
 
-  const netMargin = pct('netProfitMarginTTM') ?? pct('netProfitMargin5Y');
+  // Marge nette = NI / Revenue. Source primaire : Finnhub TTM ou 5Y précomputed.
+  // Fallback : netIncomeTtm / revenueTtm directs depuis /financials-reported.
+  let netMargin = pct('netProfitMarginTTM') ?? pct('netProfitMargin5Y');
+  if (netMargin == null
+      && input.netIncomeTtm != null
+      && input.revenueTtm != null && input.revenueTtm > 0) {
+    netMargin = input.netIncomeTtm / input.revenueTtm;
+  }
 
   // revenueCagr : préfère le calcul par régression TTM (input.revenueGrowthOverride)
   // sinon retombe sur le précomputed Finnhub revenueGrowth5Y (endpoint-based).

@@ -58,6 +58,15 @@ async function buildSnapshot(ticker: string): Promise<WatchlistEntry> {
       capitalEmployed: fhCapEmp.capitalEmployed,
       capitalEmployedReason: fhCapEmp.reason,
       capitalEmployedFormula: fhCapEmp.formulaUsed,
+      // Fallbacks robustesse (cf. analyze.ts) — pas de surcoût, ces champs viennent
+      // du même fetch computeCapitalEmployedSnapshot.
+      revenueTtm: fhCapEmp.revenueTtm,
+      netIncomeTtm: fhCapEmp.netIncomeTtm,
+      sharesLatest: fhCapEmp.sharesLatest,
+      currentAssetsSnapshot: fhCapEmp.currentAssets,
+      currentLiabilitiesSnapshot: fhCapEmp.currentLiabilities,
+      totalDebtSnapshot: fhCapEmp.totalDebt,
+      totalCashSnapshot: fhCapEmp.totalCash,
     });
     const quant = buildQuantitativeCriteria(m);  // 10 chiffres (P/FCF est désormais à part)
     const pass = quant.filter(c => c.statut === 'pass').length;
