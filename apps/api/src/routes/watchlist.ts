@@ -115,23 +115,29 @@ function emptyEntry(ticker: string): WatchlistEntry {
 }
 
 /**
- * Recompute du P/FCF en LIVE : (price_temps_réel × sharesOutstanding) / adjFcfTtm.
- * Le score lui-même ne bouge PAS (vient direct du cache, écrit par analyze).
- * Un appel /quote par ticker, parallélisé. ~1-2s pour 20 tickers attendus.
+ * Pour CHAQUE ticker (cached ou non), fetch /quote en parallèle et :
+ *   - met à jour `price` avec la valeur temps réel
+ *   - SI le snapshot a sharesOutstanding + adjFcfTtm (cache hit) → recompute pfcfTTM live
+ *   - SI le snapshot est vide (cache miss) → laisse pfcfTTM null, mais affiche au moins
+ *     le prix actuel pour que la ligne ne soit pas N/A partout
+ *
+ * Coût : ~100-300 ms par ticker via Finnhub /quote, parallélisé.
  */
 async function enrichWithLivePrice(entries: WatchlistEntry[]): Promise<WatchlistEntry[]> {
   return Promise.all(
     entries.map(async snap => {
-      if (!snap.source || snap.adjFcfTtm == null || snap.sharesOutstanding == null) {
-        return snap;
-      }
       try {
         const q = await getQuote(snap.ticker);
         const livePrice = q?.c;
         if (!livePrice || livePrice <= 0) return snap;
-        const livePfcf = (livePrice * snap.sharesOutstanding) / snap.adjFcfTtm;
-        if (!Number.isFinite(livePfcf) || livePfcf <= 0) return snap;
-        return { ...snap, price: livePrice, pfcfTTM: livePfcf };
+        // Price toujours mis à jour, même sans cache
+        const updated: WatchlistEntry = { ...snap, price: livePrice };
+        // P/FCF live SI on a les composants statiques cachés
+        if (snap.adjFcfTtm != null && snap.sharesOutstanding != null) {
+          const livePfcf = (livePrice * snap.sharesOutstanding) / snap.adjFcfTtm;
+          if (Number.isFinite(livePfcf) && livePfcf > 0) updated.pfcfTTM = livePfcf;
+        }
+        return updated;
       } catch {
         return snap;
       }

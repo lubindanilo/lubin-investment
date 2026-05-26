@@ -83,13 +83,10 @@ export function WatchlistPage() {
     saveSort(next);
   }
 
-  /** Version courante du schéma snapshot. Bump quand le backend change la structure
-   *  (cf. SNAPSHOT_SCHEMA_SCORE_MAX dans watchlist.ts). Détecte les snapshots stockés
-   *  avant un refactor pour déclencher un refresh auto. */
-  const CURRENT_SCHEMA_SCORE_MAX = 10;
-  const hasOutdatedSnapshots = useCallback(
-    (list: WatchlistEntry[]) =>
-      list.some(e => e.source != null && e.scoreChiffresMax > 0 && e.scoreChiffresMax !== CURRENT_SCHEMA_SCORE_MAX),
+  /** Détecte les entries qui n'ont pas encore de cache global TickerQuantSnapshot
+   *  (cache miss, score=0/0) → trigger auto-refresh pour les populer. */
+  const hasMissingCache = useCallback(
+    (list: WatchlistEntry[]) => list.some(e => e.scoreChiffresMax === 0 || e.source == null),
     [],
   );
 
@@ -110,12 +107,12 @@ export function WatchlistPage() {
     try {
       const list = await api.watchlist.list();
       setItems(list);
-      // Si des snapshots ont un schéma obsolète (refactor backend), déclenche un
-      // refresh silencieux en arrière-plan. /refresh re-fetch UNIQUEMENT les stales
-      // (incl. schéma périmé via le check isFresh) — pas tout. Fire-and-forget : on
-      // n'attend pas la fin pour afficher la liste, le re-render se fait quand
-      // setItems re-fire depuis refresh().
-      if (hasOutdatedSnapshots(list)) {
+      // Si un ou plusieurs tickers n'ont pas encore de cache global (= jamais analysé,
+      // ou cache invalidé par un refactor backend), déclenche un refresh silencieux en
+      // arrière-plan. /refresh recompute + écrit TickerQuantSnapshot. Fire-and-forget :
+      // la liste s'affiche immédiatement avec le prix live (via /quote), le score
+      // apparaîtra dès que le refresh complète et setItems re-fire.
+      if (hasMissingCache(list)) {
         void refresh(false);
       }
     } catch (e) {
@@ -123,7 +120,7 @@ export function WatchlistPage() {
     } finally {
       setLoading(false);
     }
-  }, [hasOutdatedSnapshots, refresh]);
+  }, [hasMissingCache, refresh]);
 
   useEffect(() => {
     // On charge les snapshots stockés en DB une seule fois au mount.
