@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeDerivedMetrics,
   buildQuantitativeCriteria,
+  buildPfcfCriterion,
   buildValuation,
   filterNews,
 } from './derivedMetrics.js';
@@ -207,10 +208,12 @@ describe('computeDerivedMetrics', () => {
 });
 
 describe('buildQuantitativeCriteria', () => {
-  it('produit exactement 11 critères', () => {
+  it('produit exactement 10 critères (P/FCF est désormais traité à part en valorisation)', () => {
     const m = computeDerivedMetrics({ metric: null, profile: null, quote: null });
     const criteres = buildQuantitativeCriteria(m);
-    expect(criteres).toHaveLength(11);
+    expect(criteres).toHaveLength(10);
+    // Garantit qu'aucun des chiffres n'est P/FCF — c'est un critère de valorisation séparé
+    expect(criteres.find(c => c.nom === 'P/FCF actuel')).toBeUndefined();
   });
 
   it('inclut "Évolution nombre d\'actions 5 ans" en position 4', () => {
@@ -273,7 +276,35 @@ describe('buildQuantitativeCriteria', () => {
     });
     const criteres = buildQuantitativeCriteria(m);
     const passCount = criteres.filter(c => c.statut === 'pass').length;
-    expect(passCount).toBeGreaterThanOrEqual(8); // au moins 8/11 pour Medpace (margin perd 'warn' sans FCF Yahoo)
+    expect(passCount).toBeGreaterThanOrEqual(7); // au moins 7/10 pour Medpace (P/FCF retiré → 1 pass de moins)
+  });
+});
+
+describe('buildPfcfCriterion (séparé des chiffres qualité)', () => {
+  it('pass quand pfcfTTM < 25', () => {
+    const m = computeDerivedMetrics({ metric: { metric: { pfcfShareTTM: 18 } }, profile: null, quote: null });
+    const c = buildPfcfCriterion(m);
+    expect(c.statut).toBe('pass');
+    expect(c.valeur).toBe('18.0×');
+  });
+
+  it('warn entre 25 et 35', () => {
+    const m = computeDerivedMetrics({ metric: { metric: { pfcfShareTTM: 30 } }, profile: null, quote: null });
+    const c = buildPfcfCriterion(m);
+    expect(c.statut).toBe('warn');
+  });
+
+  it('fail au-delà de 35', () => {
+    const m = computeDerivedMetrics({ metric: { metric: { pfcfShareTTM: 40 } }, profile: null, quote: null });
+    const c = buildPfcfCriterion(m);
+    expect(c.statut).toBe('fail');
+  });
+
+  it('Non calculable si pfcfTTM est null', () => {
+    const m = computeDerivedMetrics({ metric: null, profile: null, quote: null });
+    const c = buildPfcfCriterion(m);
+    expect(c.statut).toBe('warn');
+    expect(c.valeur).toBe('Non calculable');
   });
 });
 

@@ -27,7 +27,7 @@ import { resolveYahooTicker } from '../services/yahooResolve.js';
 import { getYahooFundamentals } from '../services/yahooFundamentals.js';
 import { getEarningsInfo } from '../services/earnings.js';
 import { fetchBusinessAnalysis, fetchManagementAnalysis } from '../services/openai.js';
-import { computeDerivedMetrics, buildQuantitativeCriteria, buildValuation, filterNews } from '../services/derivedMetrics.js';
+import { computeDerivedMetrics, buildQuantitativeCriteria, buildPfcfCriterion, buildValuation, filterNews } from '../services/derivedMetrics.js';
 import { prisma } from '../db/client.js';
 import { asyncHandler, ApiError } from '../middleware/error.js';
 import { analyzeLimiter } from '../middleware/rateLimit.js';
@@ -229,7 +229,8 @@ function buildResponse(args: {
   const { ticker, quant, business, verdictDirect, management, businessCachedAt, managementCachedAt } = args;
   const { metrics, company, fundamentalsAvailable, fundamentalsSource, currency, yahooSymbol, rawNews, earnings } = quant;
 
-  const chiffres = buildQuantitativeCriteria(metrics);
+  const chiffres = buildQuantitativeCriteria(metrics);     // 10 critères qualité
+  const pfcfCriterion = buildPfcfCriterion(metrics);       // P/FCF actuel — affiché en valorisation
 
   const histGrowth = metrics.fcfPerShareCagr ?? metrics.revenueCagr;
   const fcfGrowth = histGrowth != null ? Math.max(0.03, Math.min(histGrowth * 0.75, 0.20)) : 0.10;
@@ -237,19 +238,28 @@ function buildResponse(args: {
     ? Math.max(10, Math.min(Math.round(metrics.pfcfTTM * 0.85), 30))
     : 20;
   const valoParams: ValoParams = { targetReturn: 0.15, fcfGrowth, targetMultiple };
-  const valuation = buildValuation(metrics, valoParams);
+  const valuation = buildValuation(metrics, valoParams);   // Buy price Buffett-style
 
-  // Si business/management ne sont pas (encore) cachés, on les omet du tableau de critères.
-  // Le front affichera un CTA "Générer l'analyse qualitative" à leur place.
+  // Ordre du tableau criteres :
+  //   [0..9]    : chiffres (10)
+  //   [10..19]  : business (10, ou vide si pas encore généré)
+  //   [20..24]  : management (5, ou vide si pas encore généré)
+  //   [25, 26]  : valorisation = [P/FCF actuel, Buy price]
+  //
+  // ⚠ Le score (et son max) n'inclut PAS la valorisation : une boîte exceptionnelle
+  // reste exceptionnelle même surévaluée — elle est juste pas encore au bon prix.
+  // Score max = 10 + 10 + 5 = 25 (ou 10 si qualitatif pas encore généré).
+  const valuationBlock = [pfcfCriterion, valuation];
   const criteres = [
     ...chiffres,
     ...(business ?? []),
     ...(management ?? []),
-    valuation,
+    ...valuationBlock,
   ];
+  const scoringCandidates = [...chiffres, ...(business ?? []), ...(management ?? [])];
   const evaluables = fundamentalsAvailable
-    ? criteres
-    : criteres.filter(c => c.valeur !== 'N/A');
+    ? scoringCandidates
+    : scoringCandidates.filter(c => c.valeur !== 'N/A');
   const pass = evaluables.filter(c => c.statut === 'pass').length;
   const warn = evaluables.filter(c => c.statut === 'warn').length;
   const score = pass + Math.round(warn * 0.5);

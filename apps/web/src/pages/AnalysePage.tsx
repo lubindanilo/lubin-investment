@@ -116,23 +116,28 @@ export function AnalysePage() {
 
   function onValuationChanged(valuation: ValuationResult, params: ValoParams) {
     if (!analysis) return;
+    // Le score ne dépend PAS de la valorisation (cf. backend) — on met juste à jour
+    // la dernière entrée du tableau criteres (= buy price) et on garde le score actuel.
     const criteres = [...analysis.criteres.slice(0, -1), valuation];
-    const pass = criteres.filter(c => c.statut === 'pass').length;
-    const warn = criteres.filter(c => c.statut === 'warn').length;
-    const score = pass + Math.round(warn * 0.5);
-    setAnalysis({ ...analysis, criteres, valuation, valoParams: params, score, achat: score / analysis.scoreMax >= 0.7 });
+    setAnalysis({ ...analysis, criteres, valuation, valoParams: params });
   }
 
-  // 11 chiffres + (10 business + 5 management si qualitativeAvailable) + 1 valuation
-  // L'ordre est garanti par buildResponse côté backend (chiffres puis business puis management puis valo).
-  const chiffres = analysis?.criteres.slice(0, 11) ?? [];
-  const business = analysis?.qualitativeAvailable ? analysis.criteres.slice(11, 21) : [];
-  const management = analysis?.qualitativeAvailable ? analysis.criteres.slice(21, 26) : [];
+  // Structure du tableau criteres (cf. backend buildResponse) :
+  //   [0..9]    chiffres (10)
+  //   [10..19]  business (10) — vide si qualitatif pas encore généré
+  //   [20..24]  management (5) — vide si qualitatif pas encore généré
+  //   [25, 26]  valorisation = [P/FCF actuel, Buy price]
+  // La valorisation n'entre PAS dans le score (timing d'entrée ≠ qualité business).
+  const chiffres = analysis?.criteres.slice(0, 10) ?? [];
+  const business = analysis?.qualitativeAvailable ? analysis.criteres.slice(10, 20) : [];
+  const management = analysis?.qualitativeAvailable ? analysis.criteres.slice(20, 25) : [];
+  // Les 2 cartes valorisation (P/FCF + buy price). Toujours présentes.
+  const valuationCards = analysis?.criteres.slice(-2) ?? [];
 
   return (
     <>
       <h1 className="section-title">Analyser une entreprise</h1>
-      <p className="section-sub">Tape un ticker — analyse fondamentale complète sur 27 critères.</p>
+      <p className="section-sub">Tape un ticker — 25 critères qualité (chiffres + business + management) + valorisation séparée.</p>
 
       <div className="search-wrap">
         <input
@@ -194,7 +199,7 @@ export function AnalysePage() {
             </div>
           )}
 
-          <SectionHeader title="Chiffres (11)" sub="Calculés à partir des données fondamentales temps réel" score={scoreOf(chiffres)} />
+          <SectionHeader title="Chiffres (10)" sub="Calculés à partir des données fondamentales temps réel" score={scoreOf(chiffres)} />
           <CriteriaGrid items={chiffres} ticker={analysis.ticker} currency={analysis.currency} annualOnly={analysis.fundamentalsSource === 'yahoo'} />
 
           {/* Section qualitative — soit affichée (cache hit), soit CTA "Générer" (cache miss).
@@ -235,7 +240,18 @@ export function AnalysePage() {
             </div>
           )}
 
-          <SectionHeader title="Valorisation" />
+          <SectionHeader
+            title="Valorisation"
+            sub="Timing d'entrée — n'entre PAS dans le score qualité. Une bonne action reste bonne, juste pas encore au bon prix."
+          />
+          {valuationCards.length === 2 && (
+            <CriteriaGrid
+              items={valuationCards}
+              ticker={analysis.ticker}
+              currency={analysis.currency}
+              annualOnly={analysis.fundamentalsSource === 'yahoo'}
+            />
+          )}
           <ValuationPanel analysis={analysis} onValuationChanged={onValuationChanged} />
 
           <NewsPanel ticker={analysis.ticker} news={analysis.news} />

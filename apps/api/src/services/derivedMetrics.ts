@@ -407,16 +407,27 @@ export function buildQuantitativeCriteria(m: DerivedMetrics): Criterion[] {
         explication,
       } as const;
     })(),
-    {
-      nom: 'P/FCF actuel',
-      valeur: m.pfcfTTM == null ? NOT_CALC : m.pfcfTTM.toFixed(1) + '×',
-      cible: '< 25',
-      statut: m.pfcfTTM == null ? 'warn' : m.pfcfTTM < 25 ? 'pass' : m.pfcfTTM < 35 ? 'warn' : 'fail',
-      explication: m.pfcfTTM == null
-        ? reasonOr(m, 'pfcfTTM', 'P/FCF non calculable')
-        : m.pfcfTTM < 25 ? `Multiple raisonnable (${m.pfcfTTM.toFixed(1)}× FCF)` : `Multiple tendu — ${m.pfcfTTM.toFixed(1)}× FCF`,
-    },
   ];
+}
+
+/**
+ * Critère "P/FCF actuel" séparé des chiffres qualité.
+ *
+ * Rationale : le P/FCF est une métrique de VALORISATION (timing d'entrée), pas
+ * de qualité business. Une boîte exceptionnelle reste exceptionnelle même
+ * surévaluée — elle est juste pas encore au bon prix. On le sort donc du score
+ * Chiffres (10) et on l'affiche à côté de la valorisation Buffett.
+ */
+export function buildPfcfCriterion(m: DerivedMetrics): Criterion {
+  return {
+    nom: 'P/FCF actuel',
+    valeur: m.pfcfTTM == null ? NOT_CALC : m.pfcfTTM.toFixed(1) + '×',
+    cible: '< 25',
+    statut: m.pfcfTTM == null ? 'warn' : m.pfcfTTM < 25 ? 'pass' : m.pfcfTTM < 35 ? 'warn' : 'fail',
+    explication: m.pfcfTTM == null
+      ? reasonOr(m, 'pfcfTTM', 'P/FCF non calculable')
+      : m.pfcfTTM < 25 ? `Multiple raisonnable (${m.pfcfTTM.toFixed(1)}× FCF)` : `Multiple tendu — ${m.pfcfTTM.toFixed(1)}× FCF`,
+  };
 }
 
 // ─── Valorisation Buffett-style ──────────────────────────────────────────
