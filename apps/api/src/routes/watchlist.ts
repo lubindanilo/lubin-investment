@@ -156,36 +156,10 @@ watchlistRouter.get('/', asyncHandler(async (req: Request, res: Response) => {
     where: { userId },
     orderBy: { addedAt: 'asc' },
   });
-
-  // Auto-rebuild des snapshots au schéma obsolète (ex : ceux stockés avant le refactor
-  // P/FCF qui avaient scoreChiffresMax=11). On NE re-fetch PAS les snapshots juste
-  // time-stale → respecter le TTL 30 min pour éviter N appels Finnhub à chaque GET.
-  // Seul le check de schéma déclenche un rebuild forcé.
-  const outdatedIndices = entries
-    .map((e, i) => ({ e, i }))
-    .filter(({ e }) => hasOutdatedSchema(e.snapshot as WatchlistEntry | null))
-    .map(({ i }) => i);
-
-  if (outdatedIndices.length > 0) {
-    console.log(`[watchlist GET user=${userId.slice(0, 8)}] ${outdatedIndices.length}/${entries.length} snapshot(s) schéma obsolète → rebuild`);
-    await Promise.all(
-      outdatedIndices.map(async i => {
-        const e = entries[i]!;
-        try {
-          const snap = await buildSnapshot(e.ticker);
-          await prisma.watchlistEntry.update({
-            where: { userId_ticker: { userId, ticker: e.ticker } },
-            data: { snapshot: snap as object, refreshedAt: new Date() },
-          });
-          // Mute mutation locale pour servir directement la valeur fraîche dans la response
-          entries[i] = { ...e, snapshot: snap as object, refreshedAt: new Date() };
-        } catch (err) {
-          console.warn(`[watchlist GET rebuild ${e.ticker}]`, (err as Error).message);
-        }
-      }),
-    );
-  }
-
+  // GET = lecture pure DB, fast path. Le rebuild des snapshots obsolètes est délégué
+  // au frontend qui détecte (scoreChiffresMax !== 10) et appelle POST /refresh.
+  // Le isFresh() inclut le check de schéma → /refresh re-fetch automatiquement les
+  // entrées au schéma périmé même si time-fresh.
   const result: WatchlistEntry[] = entries.map(e => {
     const snap = (e.snapshot as WatchlistEntry | null) ?? null;
     return snap ?? emptyEntry(e.ticker);

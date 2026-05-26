@@ -83,17 +83,15 @@ export function WatchlistPage() {
     saveSort(next);
   }
 
-  const load = useCallback(async () => {
-    setLoadError(null);
-    try {
-      const list = await api.watchlist.list();
-      setItems(list);
-    } catch (e) {
-      setLoadError(e instanceof ApiError ? e : new ApiError(0, (e as Error).message));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  /** Version courante du schéma snapshot. Bump quand le backend change la structure
+   *  (cf. SNAPSHOT_SCHEMA_SCORE_MAX dans watchlist.ts). Détecte les snapshots stockés
+   *  avant un refactor pour déclencher un refresh auto. */
+  const CURRENT_SCHEMA_SCORE_MAX = 10;
+  const hasOutdatedSnapshots = useCallback(
+    (list: WatchlistEntry[]) =>
+      list.some(e => e.source != null && e.scoreChiffresMax > 0 && e.scoreChiffresMax !== CURRENT_SCHEMA_SCORE_MAX),
+    [],
+  );
 
   const refresh = useCallback(async (force = false) => {
     setRefreshing(true);
@@ -107,10 +105,32 @@ export function WatchlistPage() {
     }
   }, [toast]);
 
+  const load = useCallback(async () => {
+    setLoadError(null);
+    try {
+      const list = await api.watchlist.list();
+      setItems(list);
+      // Si des snapshots ont un schéma obsolète (refactor backend), déclenche un
+      // refresh silencieux en arrière-plan. /refresh re-fetch UNIQUEMENT les stales
+      // (incl. schéma périmé via le check isFresh) — pas tout. Fire-and-forget : on
+      // n'attend pas la fin pour afficher la liste, le re-render se fait quand
+      // setItems re-fire depuis refresh().
+      if (hasOutdatedSnapshots(list)) {
+        void refresh(false);
+      }
+    } catch (e) {
+      setLoadError(e instanceof ApiError ? e : new ApiError(0, (e as Error).message));
+    } finally {
+      setLoading(false);
+    }
+  }, [hasOutdatedSnapshots, refresh]);
+
   useEffect(() => {
     // On charge les snapshots stockés en DB une seule fois au mount.
     // Pas de re-fetch automatique des tickers (qui ferait N appels Finnhub à chaque visite) —
     // l'utilisateur déclenche un refresh manuel via le bouton ↻ s'il veut des prix frais.
+    // Exception : si certains snapshots ont un schéma obsolète (cf. load() ci-dessus),
+    // un refresh silencieux est déclenché pour propager le nouveau format.
     load();
   }, [load]);
 
