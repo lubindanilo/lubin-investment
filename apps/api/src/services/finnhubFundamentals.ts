@@ -238,7 +238,37 @@ async function fetchReportedSingle(ticker: string, freq: Frequency): Promise<Fin
   });
 }
 
-async function fetchReported(ticker: string, freq: Frequency): Promise<FinnhubFiling[]> {
+// ─── Mémoïsation du payload /financials-reported ────────────────────────────
+// Dans un seul loadQuantData, ~6 fonctions tournent en parallèle (CE, FCF ajusté,
+// 4 régressions de croissance) et redemandent toutes le MÊME payload (quarterly +
+// annual) pour en extraire des concepts différents → ~30 téléchargements identiques.
+// On mémoïse ici la PROMISE par (ticker, freq) : un seul download, partagé par tous
+// les consommateurs. Sûr car aucun consommateur ne mute le tableau de filings
+// (extraction 100 % en lecture, tris sur des tableaux neufs).
+//
+// TTL court : les filings changent ~trimestriellement, 60 s est ultra-safe et dédupe
+// en bonus les requêtes concurrentes (analyze + watchlist du même ticker). On évince
+// la clé en cas de rejet → un 429 transient n'est jamais figé, la requête suivante
+// réessaie (= comportement actuel préservé).
+const REPORTED_TTL_MS = 60_000;
+const reportedCache = new Map<string, { at: number; promise: Promise<FinnhubFiling[]> }>();
+
+function fetchReported(ticker: string, freq: Frequency): Promise<FinnhubFiling[]> {
+  const key = `${ticker.toUpperCase()}|${freq}`;
+  const hit = reportedCache.get(key);
+  if (hit && Date.now() - hit.at < REPORTED_TTL_MS) return hit.promise;
+
+  const promise = fetchReportedMerged(ticker, freq);
+  reportedCache.set(key, { at: Date.now(), promise });
+  promise.catch(() => {
+    // Éviction sur échec (sans écraser une entrée plus récente si déjà remplacée)
+    const cur = reportedCache.get(key);
+    if (cur?.promise === promise) reportedCache.delete(key);
+  });
+  return promise;
+}
+
+async function fetchReportedMerged(ticker: string, freq: Frequency): Promise<FinnhubFiling[]> {
   const aliases = TICKER_ALIASES[ticker.toUpperCase()] ?? [];
   if (aliases.length === 0) return fetchReportedSingle(ticker, freq);
 
