@@ -13,6 +13,7 @@
  * Si Yahoo échoue (cookie/crumb/parsing) → on retourne null et le caller fallback
  * sur la dérivation Finnhub (revenueGrowth5Y vs revenueShareGrowth5Y).
  */
+import type { EarningsInfo, EarningsResult } from '@lubin/shared';
 import { yahooLimiter } from '../lib/limiter.js';
 import { fetchSplitEvents, cumulativeSplitFactor } from './yahooSplits.js';
 
@@ -424,4 +425,163 @@ async function fetchTimeseriesCustomPeriod(ticker: string, types: string[], year
   }
   if (!res.ok) throw new Error(`Yahoo timeseries HTTP ${res.status}`);
   return res.json() as Promise<TimeseriesResponse>;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ── Earnings via Yahoo quoteSummary (fallback EU / non-US) ──────
+// ═══════════════════════════════════════════════════════════════
+//
+// Finnhub /calendar/earnings est US-only : pour LVMH (MC.PA), SAP (SAP.DE),
+// Nestlé (NESN.SW)… il ne renvoie rien. Yahoo quoteSummary expose :
+//   - calendarEvents.earnings  → prochaine date + EPS/revenue estimés
+//   - earningsHistory.history  → 4 derniers trimestres (EPS réel vs estimé)
+// On réutilise la session crumb/cookies de getSession() (même mécanisme que
+// fundamentals-timeseries). Yahoo ne fournit PAS le revenue réel/estimé par
+// trimestre passé de façon fiable → revenueActual reste null pour `last`.
+
+const QUOTE_SUMMARY_BASE = 'https://query1.finance.yahoo.com/v10/finance/quoteSummary';
+const YAHOO_EARNINGS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+interface CachedYahooEarnings { data: EarningsInfo; cachedAt: number }
+const yahooEarningsCache = new Map<string, CachedYahooEarnings>();
+
+interface YahooNum { raw?: number; fmt?: string }
+interface QuoteSummaryResponse {
+  quoteSummary?: {
+    result?: Array<{
+      calendarEvents?: {
+        earnings?: {
+          earningsDate?: YahooNum[];
+          earningsAverage?: YahooNum;
+          revenueAverage?: YahooNum;
+        };
+      };
+      earningsHistory?: {
+        history?: Array<{
+          epsActual?: YahooNum;
+          epsEstimate?: YahooNum;
+          quarter?: YahooNum;   // raw = epoch sec, fmt = "YYYY-MM-DD" (fin de trimestre)
+        }>;
+      };
+    }>;
+    error?: { description?: string } | null;
+  };
+}
+
+/** Normalise un champ Yahoo {raw,fmt} en date YYYY-MM-DD (préfère fmt, fallback epoch). */
+function ynumToDate(n?: YahooNum): string | null {
+  if (n?.fmt && /^\d{4}-\d{2}-\d{2}$/.test(n.fmt)) return n.fmt;
+  if (typeof n?.raw === 'number' && Number.isFinite(n.raw)) {
+    return new Date(n.raw * 1000).toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+/** Trimestre calendaire (1-4) déduit du mois de la date de fin de période. */
+function quarterOfDate(dateIso: string): number {
+  const m = Number(dateIso.slice(5, 7));
+  return m >= 1 && m <= 12 ? Math.floor((m - 1) / 3) + 1 : 0;
+}
+
+/** Construit un EarningsResult typé (mêmes conventions que le service Finnhub). */
+function buildYahooEarningsResult(opts: {
+  date: string;
+  epsActual: number | null;
+  epsEstimate: number | null;
+  revenueActual: number | null;
+  revenueEstimate: number | null;
+}): EarningsResult | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date)) return null;
+  const { epsActual, epsEstimate, revenueActual, revenueEstimate } = opts;
+  const epsSurprise = epsActual != null && epsEstimate != null ? epsActual - epsEstimate : null;
+  const epsSurprisePct = epsSurprise != null && epsEstimate ? epsSurprise / Math.abs(epsEstimate) : null;
+  const revenueSurprisePct = revenueActual != null && revenueEstimate ? (revenueActual - revenueEstimate) / Math.abs(revenueEstimate) : null;
+  return {
+    date: opts.date,
+    quarter: quarterOfDate(opts.date),
+    year: Number(opts.date.slice(0, 4)),
+    hour: null,
+    epsActual, epsEstimate, epsSurprise, epsSurprisePct,
+    revenueActual, revenueEstimate, revenueSurprisePct,
+  };
+}
+
+/**
+ * Earnings { next, last } d'un symbol Yahoo (déjà résolu, ex: MC.PA, SAP.DE).
+ * Mémoïsé 7 jours. Renvoie { next: null, last: null } si Yahoo down/inconnu.
+ */
+export async function getEarningsInfoYahoo(symbol: string): Promise<EarningsInfo> {
+  const empty: EarningsInfo = { next: null, last: null };
+  const cached = yahooEarningsCache.get(symbol);
+  if (cached && Date.now() - cached.cachedAt < YAHOO_EARNINGS_TTL_MS) return cached.data;
+
+  return yahooLimiter.schedule(async () => {
+    try {
+      const fetchOnce = async (session: YahooSession): Promise<Response> => {
+        const url = `${QUOTE_SUMMARY_BASE}/${encodeURIComponent(symbol)}`
+          + `?modules=${encodeURIComponent('calendarEvents,earningsHistory')}`
+          + `&crumb=${encodeURIComponent(session.crumb)}`;
+        const headers: Record<string, string> = { 'User-Agent': UA, Accept: 'application/json' };
+        if (session.cookies) headers.Cookie = session.cookies;
+        return fetch(url, { headers });
+      };
+
+      let session = await getSession();
+      let res = await fetchOnce(session);
+      if (res.status === 401 || res.status === 403) {
+        invalidateSession();
+        session = await getSession();
+        res = await fetchOnce(session);
+      }
+      if (!res.ok) throw new Error(`Yahoo quoteSummary HTTP ${res.status}`);
+      const data = await res.json() as QuoteSummaryResponse;
+      if (data.quoteSummary?.error) throw new Error(data.quoteSummary.error.description ?? 'quoteSummary error');
+
+      const node = data.quoteSummary?.result?.[0];
+      const todayIso = new Date().toISOString().slice(0, 10);
+
+      // ── next : calendarEvents.earnings (on ne garde que les dates ≥ aujourd'hui) ──
+      let next: EarningsResult | null = null;
+      const cal = node?.calendarEvents?.earnings;
+      const nextDate = ynumToDate(cal?.earningsDate?.[0]);
+      if (nextDate && nextDate >= todayIso) {
+        next = buildYahooEarningsResult({
+          date: nextDate,
+          epsActual: null,
+          epsEstimate: cal?.earningsAverage?.raw ?? null,
+          revenueActual: null,
+          revenueEstimate: cal?.revenueAverage?.raw ?? null,
+        });
+      }
+
+      // ── last : earningsHistory.history (plus récent avec un EPS réel) ──
+      let last: EarningsResult | null = null;
+      const history = (node?.earningsHistory?.history ?? [])
+        .map(h => {
+          const date = ynumToDate(h.quarter);
+          if (!date) return null;
+          return { date, epsActual: h.epsActual?.raw ?? null, epsEstimate: h.epsEstimate?.raw ?? null };
+        })
+        .filter((x): x is { date: string; epsActual: number | null; epsEstimate: number | null } => x !== null)
+        .sort((a, b) => b.date.localeCompare(a.date)); // récent → ancien
+      const mostRecent = history.find(h => h.epsActual != null) ?? history[0];
+      if (mostRecent) {
+        last = buildYahooEarningsResult({
+          date: mostRecent.date,
+          epsActual: mostRecent.epsActual,
+          epsEstimate: mostRecent.epsEstimate,
+          revenueActual: null,
+          revenueEstimate: null,
+        });
+      }
+
+      const result: EarningsInfo = { next, last };
+      yahooEarningsCache.set(symbol, { data: result, cachedAt: Date.now() });
+      if (next || last) console.log(`[yahoo earnings ${symbol}] next=${next?.date ?? 'n/a'} last=${last?.date ?? 'n/a'}`);
+      return result;
+    } catch (e) {
+      console.warn(`[yahoo earnings ${symbol}] échec :`, (e as Error).message);
+      yahooEarningsCache.set(symbol, { data: empty, cachedAt: Date.now() });
+      return empty;
+    }
+  });
 }

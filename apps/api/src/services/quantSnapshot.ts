@@ -13,7 +13,7 @@
  * Avec ce service partagé : impossible de diverger, c'est mathématique.
  */
 import { getMetric, getProfile2, getQuote, getCompanyNews, type FinnhubNewsItem } from './finnhub.js';
-import { getSharesHistory, computeSharesCagr, computeFcfPerShareCagr } from './yahoo.js';
+import { getSharesHistory, computeSharesCagr, computeFcfPerShareCagr, getEarningsInfoYahoo } from './yahoo.js';
 import {
   computeFcfPerShareCagrFromQuarterlies,
   computeRevenueGrowthFromQuarterlies,
@@ -210,9 +210,19 @@ export async function loadQuantData(ticker: string, opts: LoadQuantOptions = {})
   const fundamentalsAvailable = fundamentalsSource !== null;
   const company = companyFromSource ?? fhProfile?.name ?? ticker;
 
+  // Fallback earnings Yahoo : Finnhub /calendar/earnings est US-only. Pour les titres
+  // EU/non-US (résolus en yahooSymbol au-dessus), il renvoie vide → on récupère les
+  // earnings via Yahoo quoteSummary. On ne le fait que si Finnhub n'a rien donné, pour
+  // ne pas dépenser un call Yahoo sur les US où Finnhub est meilleur (revenue inclus).
+  let earningsInfo = earnings;
+  if (includeEarnings && !earningsInfo.next && !earningsInfo.last && yahooSymbol) {
+    const yEarn = await timed('yahoo earnings', getEarningsInfoYahoo(yahooSymbol)).catch(() => null);
+    if (yEarn && (yEarn.next || yEarn.last)) earningsInfo = yEarn;
+  }
+
   return {
     metrics, company, fundamentalsAvailable, fundamentalsSource, currency, yahooSymbol,
-    rawNews, earnings, finnhubCompletelyEmpty,
+    rawNews, earnings: earningsInfo, finnhubCompletelyEmpty,
     rawFhFcfAdj, rawFhCapEmp,
   };
 }
