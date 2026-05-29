@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { WatchlistEntry } from '@lubin/shared';
 import { api, ApiError } from '../lib/api.js';
@@ -83,13 +83,6 @@ export function WatchlistPage() {
     saveSort(next);
   }
 
-  /** Détecte les entries qui n'ont pas encore de cache global TickerQuantSnapshot
-   *  (cache miss, score=0/0) → trigger auto-refresh pour les populer. */
-  const hasMissingCache = useCallback(
-    (list: WatchlistEntry[]) => list.some(e => e.scoreChiffresMax === 0 || e.source == null),
-    [],
-  );
-
   const refresh = useCallback(async (force = false) => {
     setRefreshing(true);
     try {
@@ -102,33 +95,35 @@ export function WatchlistPage() {
     }
   }, [toast]);
 
+  // Charge la liste depuis le cache global + overlay prix live (GET /api/watchlist
+  // recompute le P/FCF maison à partir du prix temps réel). C'est volontairement LÉGER :
+  // aucun recompute de score/critères ici — uniquement la mise à jour du prix.
+  // Le guard inFlight évite d'empiler 2 charges concurrentes (mount + retour onglet).
+  const inFlight = useRef(false);
   const load = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setLoadError(null);
     try {
       const list = await api.watchlist.list();
       setItems(list);
-      // Si un ou plusieurs tickers n'ont pas encore de cache global (= jamais analysé,
-      // ou cache invalidé par un refactor backend), déclenche un refresh silencieux en
-      // arrière-plan. /refresh recompute + écrit TickerQuantSnapshot. Fire-and-forget :
-      // la liste s'affiche immédiatement avec le prix live (via /quote), le score
-      // apparaîtra dès que le refresh complète et setItems re-fire.
-      if (hasMissingCache(list)) {
-        void refresh(false);
-      }
     } catch (e) {
       setLoadError(e instanceof ApiError ? e : new ApiError(0, (e as Error).message));
     } finally {
       setLoading(false);
+      inFlight.current = false;
     }
-  }, [hasMissingCache, refresh]);
+  }, []);
 
   useEffect(() => {
-    // On charge les snapshots stockés en DB une seule fois au mount.
-    // Pas de re-fetch automatique des tickers (qui ferait N appels Finnhub à chaque visite) —
-    // l'utilisateur déclenche un refresh manuel via le bouton ↻ s'il veut des prix frais.
-    // Exception : si certains snapshots ont un schéma obsolète (cf. load() ci-dessus),
-    // un refresh silencieux est déclenché pour propager le nouveau format.
+    // Recharge prix + P/FCF à chaque fois que l'user (re)vient sur la page :
+    //   - navigation vers /watchlist → react-router remonte le composant → load()
+    //   - retour sur l'onglet du navigateur → visibilitychange → load()
+    // Pas de recompute de score : c'est juste un overlay prix (≈ 1 appel /quote par ticker).
     load();
+    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [load]);
 
   async function addTicker() {
