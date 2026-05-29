@@ -34,12 +34,11 @@ export function AnalysePage() {
   const [inWatchlist, setInWatchlist] = useState<Set<string>>(new Set());
   const [lastTicker, setLastTicker] = useState<string>('');
 
-  // Charge la watchlist uniquement si l'utilisateur est connecté. Sinon, ne rien afficher
-  // (l'analyse en elle-même reste publique — c'est juste le bouton "Ajouter" qui change).
-  useEffect(() => {
-    if (!user) { setInWatchlist(new Set()); return; }
-    api.watchlist.list().then(items => setInWatchlist(new Set(items.map(e => e.ticker)))).catch(() => {});
-  }, [user]);
+  // L'appartenance à la watchlist vient désormais de la réponse analyze elle-même
+  // (analysis.inWatchlist, calculé côté serveur) → fini les faux "Ajouter" quand un
+  // second fetch de la watchlist échouait. Le set local ne sert plus qu'au flip
+  // optimiste juste après un clic "Ajouter". On le vide au changement d'utilisateur.
+  useEffect(() => { setInWatchlist(new Set()); }, [user]);
 
   const run = useCallback(async (t: string) => {
     if (!t.trim()) return;
@@ -178,7 +177,7 @@ export function AnalysePage() {
           <ScoreCard
             analysis={analysis}
             onAddWatchlist={addToWatchlist}
-            alreadyInWatchlist={inWatchlist.has(analysis.ticker)}
+            alreadyInWatchlist={analysis.inWatchlist === true || inWatchlist.has(analysis.ticker)}
           />
 
           <EarningsPanel ticker={analysis.ticker} earnings={analysis.earnings} currency={analysis.currency} />

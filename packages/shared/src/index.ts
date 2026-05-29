@@ -158,6 +158,12 @@ export interface AnalyzeResponse {
   currency: string;
   /** Symbol résolu chez Yahoo si fallback Yahoo (ex "COPN.SW" quand l'utilisateur a tapé "COPN"). */
   yahooSymbol?: string;
+  /**
+   * True si le ticker est déjà dans la watchlist de l'utilisateur connecté.
+   * Calculé côté serveur (optionalAuth) → source unique, pas de course avec un
+   * second fetch. Undefined si l'utilisateur n'est pas connecté.
+   */
+  inWatchlist?: boolean;
 }
 
 // ─── Watchlist ─────────────────────────────────────────────────────────────

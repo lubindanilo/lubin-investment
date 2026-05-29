@@ -21,6 +21,7 @@ import { writeCachedSnapshot, type CachedQuantSnapshot } from '../services/quant
 import { prisma } from '../db/client.js';
 import { asyncHandler, ApiError } from '../middleware/error.js';
 import { analyzeLimiter } from '../middleware/rateLimit.js';
+import { optionalAuth } from '../middleware/auth.js';
 
 export const analyzeRouter: Router = Router();
 
@@ -145,17 +146,24 @@ function buildResponse(args: {
 // Si l'un des deux n'est pas en cache, on renvoie quand même la réponse — le front
 // affichera le bouton "Générer l'analyse qualitative".
 
-analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Response) => {
+analyzeRouter.get('/', analyzeLimiter, optionalAuth, asyncHandler(async (req: Request, res: Response) => {
   const parse = TickerSchema.safeParse(req.query.ticker);
   if (!parse.success) throw new ApiError(400, 'ticker invalide', parse.error.flatten());
   const ticker = parse.data;
 
   const quant = await loadQuantDataOrThrow(ticker);
 
-  // Lecture des 2 caches qualitatifs en parallèle (gratuit, pas d'API call GPT)
-  const [businessRow, managementRow] = await Promise.all([
+  // Lecture des 2 caches qualitatifs + appartenance watchlist (si connecté) en parallèle.
+  // L'appartenance est calculée ici côté serveur (source unique) → le front n'a pas à
+  // refetch la watchlist séparément, ce qui éliminait les faux "Ajouter" quand ce 2e
+  // fetch échouait/traînait.
+  const userId = req.user?.userId;
+  const [businessRow, managementRow, watchlistRow] = await Promise.all([
     prisma.businessAnalysis.findUnique({ where: { ticker } }),
     prisma.managementAnalysis.findUnique({ where: { ticker } }),
+    userId
+      ? prisma.watchlistEntry.findUnique({ where: { userId_ticker: { userId, ticker } } })
+      : Promise.resolve(null),
   ]);
 
   const business = businessRow && isBusinessCacheValid(businessRow.business) ? businessRow.business : null;
@@ -170,6 +178,7 @@ analyzeRouter.get('/', analyzeLimiter, asyncHandler(async (req: Request, res: Re
     businessCachedAt: business ? businessRow!.createdAt : null,
     managementCachedAt: management ? managementRow!.updatedAt : null,
   });
+  if (userId) response.inWatchlist = watchlistRow != null;
 
   // ⚠ SINGLE SOURCE OF TRUTH : on persiste le résultat dans le cache global
   // TickerQuantSnapshot. La watchlist le lira tel quel → impossible que les 2 vues
