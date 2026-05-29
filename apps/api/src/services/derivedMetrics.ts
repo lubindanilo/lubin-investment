@@ -250,15 +250,17 @@ export function computeDerivedMetrics(input: {
     ? input.revenueGrowthOverride
     : revenueGrowth5Y;
 
-  // Raisons "Non calculable" pour les ratios dérivés Finnhub
+  // Raisons "Non calculable" affichées à l'utilisateur. On NE propage PAS les messages
+  // techniques internes (détail de régression, noms de fournisseurs, etc.) : copy produit
+  // en français clair uniquement.
   const reasons: Record<string, string> = {};
   if (fcfPerShareCagr == null) {
-    reasons.fcfPerShareCagr = input.yahooFcfPerShareCagrReason ?? 'Historique insuffisant pour calculer FCF/action 5 ans';
+    reasons.fcfPerShareCagr = 'Historique insuffisant pour estimer la croissance sur 5 ans';
   }
-  if (revenueCagr == null) reasons.revenueCagr = input.revenueGrowthOverrideReason ?? 'Croissance CA 5Y indisponible';
-  if (shareCagr == null) reasons.shareCagr = input.sharesGrowthReason ?? 'Évolution actions 5Y indisponible';
-  if (netMargin == null) reasons.netMargin = 'Marge nette indisponible chez Finnhub';
-  if (fcfMargin == null) reasons.fcfMargin = 'Marge FCF non dérivable (P/FCF ou CA manquant)';
+  if (revenueCagr == null) reasons.revenueCagr = 'Historique insuffisant pour estimer la croissance du chiffre d\'affaires';
+  if (shareCagr == null) reasons.shareCagr = 'Historique insuffisant pour estimer l\'évolution du nombre d\'actions';
+  if (netMargin == null) reasons.netMargin = 'Marge nette indisponible';
+  if (fcfMargin == null) reasons.fcfMargin = 'Marge de free cash flow indisponible';
   // notCalculableReasons.cashROCE est exposé dans 2 cas :
   //  - ROCE non calculable (donnée manquante / CE négatif) → la raison explique pourquoi
   //  - ROCE calculé mais via un fallback (ultra-cash-rich, financial) → la raison explique
@@ -269,11 +271,11 @@ export function computeDerivedMetrics(input: {
   } else if (cashROCEReason) {
     reasons.cashROCE = cashROCEReason;
   }
-  if (netDebtFcf == null) reasons.netDebtFcf = 'Net debt / FCF non dérivable (EV ou FCF manquant)';
-  if (ccr == null) reasons.ccr = 'Cash Conversion Rate non dérivable (PE ou P/FCF manquant)';
-  if (operatingLeverage == null) reasons.operatingLeverage = input.opMarginTrendReason ?? 'Marges opérationnelles 5Y indisponibles';
-  if (pfcfTTM == null) reasons.pfcfTTM = 'P/FCF TTM indisponible chez Finnhub';
-  if (currentRatio == null) reasons.nwcCurrentRatio = 'Current ratio annuel indisponible';
+  if (netDebtFcf == null) reasons.netDebtFcf = 'Dette nette / FCF indisponible';
+  if (ccr == null) reasons.ccr = 'Taux de conversion du cash indisponible';
+  if (operatingLeverage == null) reasons.operatingLeverage = 'Historique insuffisant pour estimer la tendance des marges';
+  if (pfcfTTM == null) reasons.pfcfTTM = 'P/FCF indisponible';
+  if (currentRatio == null) reasons.nwcCurrentRatio = 'Ratio de liquidité indisponible';
 
   return {
     netMargin,

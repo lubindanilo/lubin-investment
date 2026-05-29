@@ -83,7 +83,7 @@ export function PfcfChartModal({ ticker, currentPfcf, annualOnly = false, onClos
             <div className="pfcf-ticker">{ticker}</div>
             <h2 className="pfcf-title">Évolution du P/FCF dans le temps</h2>
             <div className="pfcf-sub">
-              Calculé : prix × actions ÷ FCF (TTM) — source Yahoo + Finnhub
+              Calculé : prix × actions ÷ FCF (TTM)
             </div>
           </div>
           <button className="pfcf-close" onClick={onClose} aria-label="Fermer">×</button>

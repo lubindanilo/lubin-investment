@@ -24,7 +24,6 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
     if (this.state.error) {
       return (
         <div className="error-boundary">
-          <div className="error-boundary-icon">⚠️</div>
           <h1>Erreur dans l'application</h1>
           <p className="error-boundary-msg">{this.state.error.message}</p>
           <p className="error-boundary-hint">

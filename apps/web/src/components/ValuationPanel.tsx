@@ -38,7 +38,7 @@ export function ValuationPanel({ analysis, onValuationChanged }: {
     <>
       <div className="valo-panel">
         <div className="valo-header">
-          <div className="valo-title">⚙ Paramètres de valorisation</div>
+          <div className="valo-title">Paramètres de valorisation</div>
           <div className="valo-fixed">rendement visé : <span className="valo-fixed-val">15 %/an (fixe)</span></div>
         </div>
         {raw.currentPrice != null && raw.fcfPsNow != null && raw.buyPrice != null && (

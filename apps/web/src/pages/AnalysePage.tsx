@@ -164,12 +164,12 @@ export function AnalysePage() {
         <>
           {!analysis.fundamentalsAvailable && (
             <div className="fund-missing-banner">
-              <div className="fund-missing-title">⚠ Données fondamentales indisponibles pour {analysis.ticker}</div>
+              <div className="fund-missing-title">Données fondamentales indisponibles pour {analysis.ticker}</div>
               <div className="fund-missing-msg">
-                Notre source (Finnhub free tier) couvre principalement les actions cotées aux US. Pour les sociétés européennes (Suisse, France, Allemagne, etc.) ou asiatiques, les chiffres et la valorisation ne sont pas accessibles.
+                La couverture des données fondamentales est limitée pour ce titre (principalement les actions cotées aux US). Pour les sociétés européennes ou asiatiques, les chiffres et la valorisation ne sont pas disponibles.
               </div>
               <div className="fund-missing-hint">
-                Seule l'analyse qualitative (GPT recherche web) reste valide ci-dessous. Si la société a une cotation ADR US (ex : Nestlé <code>NSRGY</code>, ASML <code>ASML</code>, LVMH <code>LVMUY</code>), essaie ce ticker à la place.
+                Seule l'analyse qualitative reste valide ci-dessous. Si la société a une cotation ADR US (ex : Nestlé <code>NSRGY</code>, ASML <code>ASML</code>, LVMH <code>LVMUY</code>), essaie ce ticker à la place.
               </div>
             </div>
           )}
@@ -193,7 +193,7 @@ export function AnalysePage() {
             <div className="chart-section chart-unavailable">
               <div className="chart-title"><span>Cours boursier — {analysis.ticker}</span></div>
               <div className="chart-unavailable-msg">
-                📉 Graphique non disponible — le symbole <code>{analysis.ticker}</code> n'est pas indexé sur TradingView et Yahoo ne le résout pas.
+                Graphique non disponible pour le symbole <code>{analysis.ticker}</code>.
               </div>
             </div>
           )}
@@ -227,14 +227,13 @@ export function AnalysePage() {
             </>
           ) : (
             <div className="qual-cta">
-              <div className="qual-cta-icon">🤖</div>
               <div className="qual-cta-title">Analyse qualitative pas encore générée</div>
               <div className="qual-cta-text">
                 Les 15 critères qualitatifs (business model + management) sont calculés via GPT-4 avec recherche web (~10 s, déclenche un appel API payant).
                 <br/>Une fois généré, le <strong>business model est cache à vie</strong> (immutable) et le <strong>management peut être rafraîchi manuellement</strong>.
               </div>
               <button className="btn-primary qual-cta-btn" onClick={generateQualitative} disabled={generatingQual}>
-                {generatingQual ? <><span className="spinner" /> Génération en cours…</> : '🤖 Générer l\'analyse qualitative'}
+                {generatingQual ? <><span className="spinner" /> Génération en cours…</> : 'Générer l\'analyse qualitative'}
               </button>
             </div>
           )}

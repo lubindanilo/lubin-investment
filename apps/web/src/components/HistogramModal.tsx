@@ -133,7 +133,7 @@ export function HistogramModal({ ticker, criterionName, config, currency = 'USD'
             <div className="hist-ticker">{ticker}</div>
             <h2 className="hist-title">{config.label}</h2>
             <div className="hist-sub">
-              Critère : {criterionName} · {freq === 'quarterly' ? 'données trimestrielles' : 'données annuelles'} · source SEC via Finnhub
+              Critère : {criterionName} · {freq === 'quarterly' ? 'données trimestrielles' : 'données annuelles'}
             </div>
           </div>
           <button className="hist-close" onClick={onClose} aria-label="Fermer">×</button>
@@ -143,7 +143,7 @@ export function HistogramModal({ ticker, criterionName, config, currency = 'USD'
           {euAnnualOnly ? (
             // Tickers EU : Yahoo n'expose que ~4 années annuelles. Les boutons 1Y/5Y/…/All
             // renverraient tous les mêmes 4 points → UX trompeuse. On affiche un tag static.
-            <span className="period-static">4 ans annuels (max Yahoo pour ce ticker)</span>
+            <span className="period-static">Données annuelles</span>
           ) : (
             PERIODS.map(p => (
               <button
@@ -165,25 +165,6 @@ export function HistogramModal({ ticker, criterionName, config, currency = 'USD'
 
         {!loading && !error && data && data.length === 0 && (
           <div className="hist-error">Aucune donnée trimestrielle disponible pour cette période.</div>
-        )}
-
-        {!loading && !error && data && data.length > 0 && euAnnualOnly && (
-          <div className="hist-gap-warning">
-            <strong>ℹ Données annuelles uniquement</strong> : Yahoo Finance ne fournit que 4 années annuelles pour les bourses européennes (et pas les trimestres). C'est la meilleure profondeur disponible sans abonnement payant.
-          </div>
-        )}
-
-        {!loading && !error && data && data.length > 0 && gaps.length > 0 && !euAnnualOnly && (
-          <div className="hist-gap-warning">
-            <strong>⚠ Donnée incomplète</strong> : il manque environ {gaps.reduce((s, g) => s + g.missingApprox, 0)} {freq === 'quarterly' ? 'trimestre(s)' : 'année(s)'} entre{' '}
-            {gaps.map((g, i) => (
-              <span key={i}>
-                {i > 0 && ' et '}
-                <code>{formatDateShort(g.from)} → {formatDateShort(g.to)}</code>
-              </span>
-            ))}
-            {' '}dans les données Finnhub pour ce ticker. Le CAGR est désactivé car il ne serait pas comparable sur série discontinue.
-          </div>
         )}
 
         {!loading && !error && data && data.length > 0 && (
@@ -273,10 +254,4 @@ function formatQuarter(isoDate: string): string {
   const month = parseInt(m[2]!, 10);
   const q = month <= 3 ? 'Q1' : month <= 6 ? 'Q2' : month <= 9 ? 'Q3' : 'Q4';
   return `${q} ${m[1]}`;
-}
-
-function formatDateShort(isoDate: string): string {
-  const m = isoDate.match(/^(\d{4})-(\d{2})/);
-  if (!m) return isoDate;
-  return `${m[2]}/${m[1]!.slice(2)}`;
 }

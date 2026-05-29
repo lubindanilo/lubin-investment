@@ -8,9 +8,9 @@ import { CriterionInfoModal, hasInfoGuide } from './CriterionInfoModal.js';
 import './CriterionCard.css';
 
 const BADGE_LABEL: Record<Criterion['statut'], string> = {
-  pass: '✓ OUI',
-  fail: '✗ NON',
-  warn: '⚠ PARTIEL',
+  pass: 'OUI',
+  fail: 'NON',
+  warn: 'PARTIEL',
 };
 
 /** Récupère le multiple P/FCF si le critère est "P/FCF actuel" — utile pour le ReferenceLine de la modal. */
@@ -60,7 +60,7 @@ export function CriterionCard({ c, ticker, currency = 'USD', annualOnly = false 
                 aria-label={`En savoir plus sur le critère ${c.nom}`}
                 title="Comment interpréter cette valeur"
               >
-                ⓘ
+                i
               </button>
             )}
           </div>
@@ -69,11 +69,6 @@ export function CriterionCard({ c, ticker, currency = 'USD', annualOnly = false 
         <div className="critere-value">{c.valeur}</div>
         <div className="critere-target">{c.cible}</div>
         <div className="critere-explain">{c.explication}</div>
-        {clickable && (
-          <div className="critere-hist-hint">
-            {chartKind === 'line' ? '📈' : '📊'} cliquer pour voir l'historique
-          </div>
-        )}
       </div>
 
       {open && ticker && chartKind === 'histogram' && histogramConfig && (

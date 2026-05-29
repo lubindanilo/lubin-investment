@@ -15,7 +15,7 @@ export function NewsPanel({ ticker, news }: { ticker: string; news: NewsItem[] }
     <div className="news-section">
       <div className="news-title">
         <span>Actualités récentes — {ticker}</span>
-        <span className="news-subtitle">via Finnhub · 60 derniers jours</span>
+        <span className="news-subtitle">60 derniers jours</span>
       </div>
       <div className="news-list">
         {news.map((n, i) => (

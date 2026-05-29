@@ -188,12 +188,10 @@ export function WatchlistPage() {
 
       {loading ? (
         <div className="empty-state">
-          <div className="empty-state-icon">⏳</div>
           <div className="empty-state-text">Chargement…</div>
         </div>
       ) : items.length === 0 && !loadError ? (
         <div className="empty-state">
-          <div className="empty-state-icon">⭐</div>
           <div className="empty-state-text">Watchlist vide</div>
           <div className="empty-state-sub">Ajoute un ticker ci-dessus, ou clique « Ajouter à la watchlist » après une analyse.</div>
         </div>

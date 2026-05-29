@@ -92,11 +92,3 @@
   transform: translateY(1px);
 }
 
-.critere-hist-hint {
-  font-size: 10px;
-  color: var(--brand);
-  font-family: 'IBM Plex Mono', monospace;
-  margin-top: 6px;
-  opacity: 0.6;
-}
-.critere-card.clickable:hover .critere-hist-hint { opacity: 1; }

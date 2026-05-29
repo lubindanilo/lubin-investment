@@ -17,7 +17,7 @@ export function EarningsPanel({ ticker, earnings, currency = 'USD' }: { ticker: 
   return (
     <div className="earnings-panel">
       <div className="earnings-title">
-        <span>📅 Earnings — {ticker}</span>
+        <span>Earnings — {ticker}</span>
         <a
           href={seekingAlpha}
           target="_blank"
