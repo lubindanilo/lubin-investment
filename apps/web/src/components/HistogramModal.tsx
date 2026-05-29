@@ -102,6 +102,29 @@ export function HistogramModal({ ticker, criterionName, config, currency = 'USD'
     return { latest, avg, cagr };
   }, [data, gaps]);
 
+  // Insère des "trous" visuels : pour chaque gap détecté, on ajoute des barres
+  // fantômes (value=null) aux dates manquantes → recharts laisse un espace vide
+  // au lieu de coller deux trimestres distants d'un an (ex AMD, FY2023 manquant).
+  // Les stats/gaps restent calculés sur `data` (les vrais points).
+  const chartData = useMemo<Array<{ date: string; value: number | null }>>(() => {
+    if (!data || data.length === 0) return [];
+    if (gaps.length === 0) return data;
+    const stepMs = (freq === 'quarterly' ? 91 : 365) * 24 * 3600 * 1000;
+    const out: Array<{ date: string; value: number | null }> = [];
+    for (let i = 0; i < data.length; i++) {
+      out.push(data[i]!);
+      const next = data[i + 1];
+      if (!next) continue;
+      let cursor = new Date(data[i]!.date).getTime();
+      const target = new Date(next.date).getTime();
+      while (target - cursor > stepMs * 1.5) {
+        cursor += stepMs;
+        out.push({ date: new Date(cursor).toISOString().slice(0, 10), value: null });
+      }
+    }
+    return out;
+  }, [data, gaps, freq]);
+
   return (
     <div className="hist-overlay" onClick={onClose}>
       <div className="hist-modal" onClick={e => e.stopPropagation()}>
@@ -167,7 +190,7 @@ export function HistogramModal({ ticker, criterionName, config, currency = 'USD'
           <>
             <div className="hist-chart-wrap">
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                   <XAxis
                     dataKey="date"

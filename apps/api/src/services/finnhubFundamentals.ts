@@ -668,6 +668,41 @@ function windowed(points: TtmPoint[], windowYears: number): TtmPoint[] {
   return points.filter(p => p.ts >= cutoff);
 }
 
+/**
+ * Détecte une discontinuité (trou) dans une série datée. Cadence trimestrielle
+ * attendue ≈ 91j ; tout écart > maxGapDays signale des trimestres manquants —
+ * typiquement un changement de ticker SEC (FISV → FI) ou des filings absents chez
+ * Finnhub (cas AMD : tout FY2023 manquant). On reprend le seuil 200j du modal
+ * histogramme pour que score et graphe soient cohérents.
+ * Retourne { missing, from, to } sur le PREMIER trou trouvé, ou null si continue.
+ */
+function detectDiscontinuity(
+  points: { date: string; ts: number }[],
+  maxGapDays = 200,
+): { missing: number; from: string; to: string } | null {
+  if (points.length < 2) return null;
+  const sorted = [...points].sort((a, b) => a.ts - b.ts);
+  const maxGapMs = maxGapDays * 24 * 3600 * 1000;
+  const quarterMs = 91 * 24 * 3600 * 1000;
+  for (let i = 1; i < sorted.length; i++) {
+    const delta = sorted[i]!.ts - sorted[i - 1]!.ts;
+    if (delta > maxGapMs) {
+      return {
+        missing: Math.max(1, Math.round(delta / quarterMs) - 1),
+        from: sorted[i - 1]!.date,
+        to: sorted[i]!.date,
+      };
+    }
+  }
+  return null;
+}
+
+/** Message standard "série discontinue" partagé par les régressions trimestrielles. */
+function discontinuityReason(gap: { missing: number; from: string; to: string }): string {
+  const fmt = (d: string) => `${d.slice(5, 7)}/${d.slice(2, 4)}`;
+  return `Série Finnhub discontinue (~${gap.missing} trimestre(s) manquant(s) entre ${fmt(gap.from)} et ${fmt(gap.to)}) — croissance non comparable sur série à trou`;
+}
+
 // ─── FCF ajusté SBC ─────────────────────────────────────────────────────────
 // FCF_adj = CFO − SBC + CapEx (CapEx déjà signé négatif). Pourquoi soustraire SBC :
 // elle est ajoutée au CFO comme add-back non-cash, ce qui INFLATE le CFO de la valeur
@@ -1000,6 +1035,9 @@ export async function computeRevenueGrowthFromQuarterlies(
   const ttm = windowed(rollingTtmSum(revQ), windowYears);
   if (ttm.length < 4) return { value: null, reason: 'Trop peu de TTM dans la fenêtre' };
 
+  const gap = detectDiscontinuity(ttm);
+  if (gap) return { value: null, reason: discontinuityReason(gap) };
+
   const r = regressLogGrowth(ttm);
   if (!r) return { value: null, reason: 'Régression non calculable (TTM ≤ 0 ?)' };
   console.log(`[revGrowthRegress ${ticker}] ${r.n} TTM | ${r.first.date}(${(r.first.value/1e9).toFixed(1)}B) → ${r.last.date}(${(r.last.value/1e9).toFixed(1)}B) → ${(r.rate * 100).toFixed(2)}%/an`);
@@ -1025,6 +1063,9 @@ export async function computeSharesGrowthFromQuarterlies(
 
   const win = windowed(points, windowYears);
   if (win.length < 4) return { value: null, reason: 'Trop peu de shares dans la fenêtre' };
+
+  const gap = detectDiscontinuity(win);
+  if (gap) return { value: null, reason: discontinuityReason(gap) };
 
   const r = regressLogGrowth(win);
   if (!r) return { value: null, reason: 'Régression non calculable' };
@@ -1062,6 +1103,9 @@ export async function computeOperatingMarginTrendFromQuarterlies(
 
   const win = windowed(marginTtm, windowYears);
   if (win.length < 4) return { value: null, reason: 'Trop peu de marges TTM dans la fenêtre' };
+
+  const gap = detectDiscontinuity(win);
+  if (gap) return { value: null, reason: discontinuityReason(gap) };
 
   const r = regressLogGrowth(win);
   if (!r) return { value: null, reason: 'Régression non calculable (marge ≤ 0 ?)' };
@@ -1126,6 +1170,9 @@ export async function computeFcfPerShareCagrFromQuarterlies(
   // Minimum 8 TTM positifs sinon la régression sur peu de points donne des résultats aberrants
   // (cas AMZN dont le FCF_adj est négatif la moitié du temps → 4-6 pts résiduels → slope explosif).
   if (win.length < 8) return { value: null, reason: `Trop peu de TTM FCF/action positifs (${win.length}/8 minimum) — FCF/action_adj souvent négatif sur la période` };
+
+  const gap = detectDiscontinuity(win);
+  if (gap) return { value: null, reason: discontinuityReason(gap) };
 
   const r = regressLogGrowth(win);
   if (!r) return { value: null, reason: 'Régression non calculable' };
