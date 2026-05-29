@@ -900,21 +900,25 @@ export async function computeAdjustedFcfTtm(ticker: string): Promise<AdjustedFcf
     getReportedTimeseries(ticker, 'capex', 'quarterly', 2),
     getReportedTimeseries(ticker, 'sbc', 'quarterly', 2),
   ]);
-  if (cfoQ.length < 4 || capexQ.length < 4) return empty;
+  if (cfoQ.length < 4) return empty;
+
+  // Société sans AUCUNE ligne CapEx (ex: TPL, trust foncier/royalties — capex ≈ 0) → on
+  // assume CapEx = 0 plutôt que d'échouer (le `?? 0` plus bas ne vaut 0 que si capexTtm est
+  // entièrement vide ; une série partielle garde sa dernière valeur réelle).
 
   // TTM rolling sum sur les 4 derniers Q
   const cfoTtm = rollingTtmSum(cfoQ);
   const capexTtm = rollingTtmSum(capexQ);
   const sbcTtm = sbcQ.length >= 4 ? rollingTtmSum(sbcQ) : [];
 
-  if (cfoTtm.length === 0 || capexTtm.length === 0) return empty;
+  if (cfoTtm.length === 0) return empty;
   // On prend le dernier TTM. Match par date (le plus récent commun à toutes les séries).
   const lastCfo = cfoTtm[cfoTtm.length - 1]!;
-  const capexAtDate = capexTtm.find(c => c.date === lastCfo.date) ?? capexTtm[capexTtm.length - 1]!;
+  const capexAtDate = capexTtm.find(c => c.date === lastCfo.date) ?? capexTtm[capexTtm.length - 1];
   const sbcAtDate = sbcTtm.find(s => s.date === lastCfo.date) ?? sbcTtm[sbcTtm.length - 1];
 
   const ttmCfo = lastCfo.value;
-  const ttmCapex = capexAtDate.value;
+  const ttmCapex = capexAtDate?.value ?? 0;
   const ttmSbc = sbcAtDate?.value ?? null;
   // CapEx est en valeur absolue chez Finnhub (cf commentaire dans extractValue) → toujours soustraire.
   const rawFcf = ttmCfo - Math.abs(ttmCapex);
@@ -935,7 +939,7 @@ export async function getAdjustedFcfTtmSeries(ticker: string, windowYears: numbe
     getReportedTimeseries(ticker, 'capex', 'quarterly', windowYears + 1),
     getReportedTimeseries(ticker, 'sbc', 'quarterly', windowYears + 1),
   ]);
-  if (cfoQ.length < 4 || capexQ.length < 4) return [];
+  if (cfoQ.length < 4) return [];
 
   const cfoTtm = rollingTtmSum(cfoQ);
   const capexTtm = rollingTtmSum(capexQ);
@@ -943,13 +947,18 @@ export async function getAdjustedFcfTtmSeries(ticker: string, windowYears: numbe
   const capexByDate = new Map(capexTtm.map(p => [p.date, p.value]));
   const sbcByDate = new Map(sbcTtm.map(p => [p.date, p.value]));
 
+  // Société sans AUCUNE ligne CapEx (ex: TPL, trust foncier/royalties) → CapEx = 0.
+  // On NE fabrique PAS de 0 si la série existe mais a un trou ponctuel (risque de
+  // surestimer le FCF d'une boîte capex-heavy) : dans ce cas on skip le quarter.
+  const noCapexReported = capexQ.length === 0;
+
   const out: TtmPoint[] = [];
   for (const p of cfoTtm) {
     const capex = capexByDate.get(p.date);
-    if (capex == null) continue;
+    if (capex == null && !noCapexReported) continue;
     const sbc = sbcByDate.get(p.date) ?? 0; // si pas de SBC ce quarter, on assume 0 (boîte sans SBC)
     // CapEx en valeur absolue chez Finnhub → toujours soustraire la magnitude.
-    out.push({ date: p.date, ts: p.ts, value: p.value - Math.abs(capex) - sbc });
+    out.push({ date: p.date, ts: p.ts, value: p.value - Math.abs(capex ?? 0) - sbc });
   }
   return out;
 }
