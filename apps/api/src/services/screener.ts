@@ -15,51 +15,37 @@
 import { prisma } from '../db/client.js';
 import { getStockSymbols } from './finnhub.js';
 import { buildAndCacheQuantSnapshot } from './scoreSnapshot.js';
+import { EU_LARGE_CAPS } from '../data/euLargeCaps.js';
 
-/** Couverture progressive : US d'abord (priority 0), puis EU (1), puis le reste (2). */
-const REGIONS: Record<string, { priority: number; exchanges: string[] }> = {
-  US: { priority: 0, exchanges: ['US'] },
-  EU: { priority: 1, exchanges: ['PA', 'DE', 'SW', 'AS', 'L', 'MI', 'MC', 'BR', 'HE', 'ST', 'CO', 'OL', 'LS', 'VI', 'IR'] },
-  // OTHER : ajouté plus tard (TO, HK, T, AX…)
-};
+/**
+ * Couverture progressive : US d'abord (priority 0), puis EU (1).
+ * US : liste Finnhub (filtrée bourses primaires). EU : liste curée (Finnhub free ne fournit
+ * pas les symboles hors US), scorée via le fallback Yahoo.
+ */
+const US_PRIORITY = 0;
+const EU_PRIORITY = 1;
 
-/** Types Finnhub qu'on garde (on écarte ETF, warrants, droits, etc.). */
+/** Types Finnhub qu'on garde (on écarte ETF, warrants, droits, fonds, etc.). */
 const KEPT_TYPES = new Set(['Common Stock', 'ADR', 'REIT', '']);
 /** Symbole compatible avec le reste de l'app (TickerSchema). */
 const VALID_SYMBOL = /^[A-Z.\-]{1,8}$/;
+/**
+ * Bourses US "réelles" : Nasdaq (XNAS), NYSE (XNYS), NYSE American/AMEX (XASE).
+ * On EXCLUT l'OTC/pink-sheets (OOTC) — ~17 600 tickers obscurs souvent sans données,
+ * qui gaspillent les cycles et polluent les résultats (faux 10/10 sur données fantômes).
+ * Les vraies ADR de sociétés étrangères restent couvertes par le seed EU (bourse d'origine).
+ */
+const US_PRIMARY_MICS = new Set(['XNAS', 'XNYS', 'XASE']);
 
 const MAX_ATTEMPTS = 5;
 const RESCORE_TTL_MS = 90 * 24 * 3600 * 1000; // re-note les dates inconnues tous les 90j
 
 export interface SeedResult { region: string; fetched: number; inserted: number }
 
-/** Ingère l'univers d'une région dans la file (idempotent : n'écrase pas les lignes existantes). */
-export async function seedRegion(region: string): Promise<SeedResult> {
-  const cfg = REGIONS[region];
-  if (!cfg) throw new Error(`Région inconnue : ${region} (dispo : ${Object.keys(REGIONS).join(', ')})`);
+type SeedRow = { ticker: string; exchange: string | null; name: string | null; currency: string | null; region: string; priority: number };
 
-  const rows: { ticker: string; exchange: string; name: string | null; currency: string | null; region: string; priority: number }[] = [];
-  const seen = new Set<string>();
-  for (const ex of cfg.exchanges) {
-    const symbols = await getStockSymbols(ex).catch(() => [] as Awaited<ReturnType<typeof getStockSymbols>>);
-    for (const s of symbols) {
-      const ticker = (s.symbol ?? '').toUpperCase();
-      if (!ticker || seen.has(ticker)) continue;
-      if (!VALID_SYMBOL.test(ticker)) continue;
-      if (!KEPT_TYPES.has(s.type ?? '')) continue;
-      seen.add(ticker);
-      rows.push({
-        ticker,
-        exchange: ex,
-        name: s.description ?? null,
-        currency: s.currency ?? null,
-        region,
-        priority: cfg.priority,
-      });
-    }
-  }
-
-  // createMany skipDuplicates : insère uniquement les nouveaux, préserve les déjà notés.
+/** Insère les lignes en lot, idempotent (skipDuplicates : préserve les déjà notées). */
+async function insertRows(region: string, rows: SeedRow[]): Promise<number> {
   let inserted = 0;
   const CHUNK = 1000;
   for (let i = 0; i < rows.length; i += CHUNK) {
@@ -67,7 +53,45 @@ export async function seedRegion(region: string): Promise<SeedResult> {
     inserted += res.count;
   }
   console.log(`[screener seed ${region}] ${rows.length} tickers valides → ${inserted} nouveaux insérés`);
-  return { region, fetched: rows.length, inserted };
+  return inserted;
+}
+
+/** Ingère l'univers d'une région dans la file. US = Finnhub (bourses primaires), EU = liste curée. */
+export async function seedRegion(region: string): Promise<SeedResult> {
+  if (region === 'US') return seedUs();
+  if (region === 'EU') return seedEu();
+  throw new Error(`Région inconnue : ${region} (dispo : US, EU)`);
+}
+
+/** US : liste Finnhub /stock/symbol?exchange=US, filtrée aux bourses primaires (pas d'OTC). */
+async function seedUs(): Promise<SeedResult> {
+  const symbols = await getStockSymbols('US').catch(() => [] as Awaited<ReturnType<typeof getStockSymbols>>);
+  const rows: SeedRow[] = [];
+  const seen = new Set<string>();
+  for (const s of symbols) {
+    const ticker = (s.symbol ?? '').toUpperCase();
+    if (!ticker || seen.has(ticker)) continue;
+    if (!VALID_SYMBOL.test(ticker)) continue;
+    if (!KEPT_TYPES.has(s.type ?? '')) continue;
+    if (!US_PRIMARY_MICS.has(s.mic ?? '')) continue; // pas d'OTC/pink-sheets
+    seen.add(ticker);
+    rows.push({ ticker, exchange: s.mic ?? 'US', name: s.description ?? null, currency: s.currency ?? null, region: 'US', priority: US_PRIORITY });
+  }
+  return { region: 'US', fetched: rows.length, inserted: await insertRows('US', rows) };
+}
+
+/** EU : liste curée des grandes capitalisations (Finnhub free ne liste pas l'EU). */
+async function seedEu(): Promise<SeedResult> {
+  const seen = new Set<string>();
+  const rows: SeedRow[] = [];
+  for (const raw of EU_LARGE_CAPS) {
+    const ticker = raw.toUpperCase();
+    if (seen.has(ticker) || !VALID_SYMBOL.test(ticker)) continue;
+    seen.add(ticker);
+    const ex = ticker.includes('.') ? ticker.slice(ticker.lastIndexOf('.') + 1) : null;
+    rows.push({ ticker, exchange: ex, name: null, currency: null, region: 'EU', priority: EU_PRIORITY });
+  }
+  return { region: 'EU', fetched: rows.length, inserted: await insertRows('EU', rows) };
 }
 
 /** Sélectionne les prochains tickers à (re)noter, par priorité de région puis ancienneté. */
