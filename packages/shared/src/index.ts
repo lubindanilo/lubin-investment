@@ -179,6 +179,8 @@ export interface WatchlistEntry {
   currency?: string;
   /** Source qui a fourni la donnée — utile pour distinguer EU vs US dans l'UI */
   source?: 'finnhub' | 'yahoo' | null;
+  /** Date du prochain earnings (YYYY-MM-DD). Null si inconnue. Cachée jusqu'à la date. */
+  nextEarningsDate?: string | null;
   // ─── Champs internes pour recompute P/FCF live ──────────────────────────
   // Ces 2 champs ne changent qu'à chaque earnings (FCF) ou très peu (shares).
   // Ils permettent de recomputer pfcfTTM = (price × shares) / adjFcfTtm avec un

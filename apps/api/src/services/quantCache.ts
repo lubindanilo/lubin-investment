@@ -43,6 +43,14 @@ export interface CachedQuantSnapshot {
   // Pour le recompute LIVE du P/FCF en watchlist (price × shares / adjFcfTtm)
   adjFcfTtm: number | null;
   sharesOutstanding: number | null;
+
+  // ─── Prochain earnings (affiché en watchlist) ───────────────────────────
+  /** Date du prochain earnings (YYYY-MM-DD). Null si inconnue. */
+  nextEarningsDate?: string | null;
+  /** ISO timestamp du dernier check earnings. Évite de re-fetcher en boucle quand
+   *  aucune date n'est connue (recheck espacé), tout en gardant le cache valide
+   *  "jusqu'à la date" quand une date future est connue. */
+  earningsCheckedAt?: string | null;
 }
 
 /** Lit le snapshot caché pour un ticker. Retourne null si absent (jamais analysé). */

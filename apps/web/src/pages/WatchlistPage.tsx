@@ -205,6 +205,7 @@ export function WatchlistPage() {
                 <th style={{ textAlign: 'right' }}>Prix</th>
                 <SortableTh label="P/FCF" colKey="pfcf" sort={sort} onSort={toggleSort} align="right" />
                 <SortableTh label="Score chiffres" colKey="score" sort={sort} onSort={toggleSort} align="right" />
+                <th style={{ textAlign: 'right' }}>Prochain earnings</th>
                 <th style={{ textAlign: 'right' }}>
                   {sort.key !== 'default' && (
                     <button className="wl-sort-reset" onClick={resetSort} title="Réinitialiser le tri">
@@ -252,6 +253,14 @@ function SortableTh({ label, colKey, sort, onSort, align }: {
   );
 }
 
+/** Formate la date du prochain earnings (ex "28 juil. 2026"). "—" si inconnue. */
+function formatEarningsDate(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso + 'T12:00:00Z');
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 function WatchRow({ e, onOpen, onRemove }: { e: WatchlistEntry; onOpen: () => void; onRemove: () => void }) {
   const pfcfCls = e.pfcfTTM == null ? '' : e.pfcfTTM < 25 ? 'pass' : e.pfcfTTM < 35 ? 'warn' : 'fail';
   const pct = e.scoreChiffres / e.scoreChiffresMax;
@@ -267,6 +276,7 @@ function WatchRow({ e, onOpen, onRemove }: { e: WatchlistEntry; onOpen: () => vo
       <td style={{ textAlign: 'right' }} className={`wl-score ${scoreCls}`}>
         {e.scoreChiffres}/{e.scoreChiffresMax}
       </td>
+      <td style={{ textAlign: 'right' }} className="wl-earnings">{formatEarningsDate(e.nextEarningsDate)}</td>
       <td style={{ textAlign: 'right' }}>
         <button
           className="wl-remove"

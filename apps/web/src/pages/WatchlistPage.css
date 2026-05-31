@@ -95,6 +95,8 @@
 .wl-score.mid { color: var(--orange); }
 .wl-score.low { color: var(--red); }
 
+.wl-earnings { font-family: 'IBM Plex Mono', monospace; color: var(--text2); white-space: nowrap; }
+
 .wl-remove {
   background: none;
   border: none;

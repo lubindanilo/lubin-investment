@@ -24,6 +24,7 @@ import { z } from 'zod';
 import type { WatchlistEntry } from '@lubin/shared';
 import { prisma } from '../db/client.js';
 import { getQuote } from '../services/finnhub.js';
+import { getNextEarningsDate } from '../services/earnings.js';
 import { loadQuantData } from '../services/quantSnapshot.js';
 import { buildQuantitativeCriteria } from '../services/derivedMetrics.js';
 import {
@@ -45,7 +46,12 @@ const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z.\-]{1,8}$/);
  * refresh. Réutilise loadQuantData → même logique que /api/analyze, garanti.
  */
 async function computeAndCache(ticker: string): Promise<CachedQuantSnapshot> {
-  const quant = await loadQuantData(ticker, { includeNews: false, includeEarnings: false, log: false });
+  // On lit le snapshot précédent pour préserver la date d'earnings déjà cachée (évite de
+  // re-fetcher Finnhub dans le refresh lourd ; le GET la rafraîchit quand elle est passée).
+  const [quant, prev] = await Promise.all([
+    loadQuantData(ticker, { includeNews: false, includeEarnings: false, log: false }),
+    getCachedSnapshot(ticker).catch(() => null),
+  ]);
 
   // Reconstitue les 10 chiffres + score (même formule que persistQuantCache dans analyze.ts)
   const chiffres = buildQuantitativeCriteria(quant.metrics);
@@ -82,6 +88,8 @@ async function computeAndCache(ticker: string): Promise<CachedQuantSnapshot> {
     scoreChiffresMax: evaluable.length,
     adjFcfTtm,
     sharesOutstanding,
+    nextEarningsDate: prev?.nextEarningsDate ?? null,
+    earningsCheckedAt: prev?.earningsCheckedAt ?? null,
   };
   await writeCachedSnapshot(ticker, snapshot);
   return snapshot;
@@ -101,6 +109,7 @@ function toWatchlistEntry(s: CachedQuantSnapshot): WatchlistEntry {
     scoreChiffresMax: s.scoreChiffresMax,
     currency: s.currency,
     source: s.fundamentalsSource,
+    nextEarningsDate: s.nextEarningsDate ?? null,
     adjFcfTtm: s.adjFcfTtm,
     sharesOutstanding: s.sharesOutstanding,
   };
@@ -145,6 +154,46 @@ async function enrichWithLivePrice(entries: WatchlistEntry[]): Promise<Watchlist
   );
 }
 
+// ─── Date du prochain earnings (cachée jusqu'à la date) ─────────────────────
+const EARNINGS_RECHECK_NO_DATE_MS = 3 * 24 * 3600 * 1000; // recheck "pas de date connue" tous les 3j
+const MAX_EARNINGS_FETCH_PER_GET = 30;                    // garde-fou anti-burst sur grosse watchlist
+
+/** Vrai si la date earnings cachée est périmée et doit être re-fetchée. */
+function earningsStale(snap: CachedQuantSnapshot, todayIso: string, nowMs: number): boolean {
+  if (!snap.earningsCheckedAt) return true;                                    // jamais vérifié
+  if (snap.nextEarningsDate && snap.nextEarningsDate < todayIso) return true;  // date passée → nouvel earnings à venir
+  if (!snap.nextEarningsDate) {                                               // aucune date connue → recheck espacé
+    return nowMs - Date.parse(snap.earningsCheckedAt) > EARNINGS_RECHECK_NO_DATE_MS;
+  }
+  return false;                                                               // date future connue → cache valide jusqu'à l'échéance
+}
+
+/**
+ * Rafraîchit paresseusement les dates d'earnings périmées (date passée ou jamais
+ * vérifiée) et persiste dans le cache global. En régime établi : 0 fetch (une date
+ * future connue n'est jamais re-fetchée avant son échéance). Mute les entries fournies.
+ */
+async function refreshStaleEarnings(
+  result: WatchlistEntry[],
+  cacheByTicker: Map<string, CachedQuantSnapshot>,
+): Promise<void> {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const nowMs = Date.now();
+  const stale = result
+    .filter(e => { const s = cacheByTicker.get(e.ticker); return s && earningsStale(s, todayIso, nowMs); })
+    .slice(0, MAX_EARNINGS_FETCH_PER_GET);
+  if (stale.length === 0) return;
+
+  await Promise.all(stale.map(async e => {
+    const date = await getNextEarningsDate(e.ticker).catch(() => null);
+    e.nextEarningsDate = date;
+    const snap = cacheByTicker.get(e.ticker)!;
+    snap.nextEarningsDate = date;
+    snap.earningsCheckedAt = new Date().toISOString();
+    await writeCachedSnapshot(e.ticker, snap).catch(() => {});
+  }));
+}
+
 // ─── GET /api/watchlist ────────────────────────────────────────────────────
 // Lecture pure : liste des tickers de l'user × cache global TickerQuantSnapshot.
 // Aucun recompute. Seul le prix est rafraîchi en live.
@@ -170,6 +219,9 @@ watchlistRouter.get('/', asyncHandler(async (req: Request, res: Response) => {
 
   // 3) Live overlay sur le prix → recompute du P/FCF (le score reste tel quel)
   const result = await enrichWithLivePrice(baseList);
+
+  // 4) Rafraîchit les dates d'earnings périmées (en régime établi : aucun fetch)
+  await refreshStaleEarnings(result, cacheByTicker);
 
   console.log(`[watchlist GET user=${userId.slice(0, 8)}] ${tickers.length} tickers, ${cacheByTicker.size} cached, live overlay in ${Date.now() - t0}ms`);
   res.json(result);

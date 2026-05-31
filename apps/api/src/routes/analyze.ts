@@ -240,6 +240,10 @@ async function persistQuantCache(
     scoreChiffresMax: evaluable.length,
     adjFcfTtm,
     sharesOutstanding,
+    // L'analyse fetch déjà les earnings → on profite pour cacher la date du prochain
+    // (affichée en watchlist, cachée jusqu'à la date).
+    nextEarningsDate: response.earnings?.next?.date ?? null,
+    earningsCheckedAt: new Date().toISOString(),
   };
   await writeCachedSnapshot(ticker, snapshot).catch(err => {
     console.warn(`[analyze ${ticker}] échec persistance cache : ${err.message}`);
