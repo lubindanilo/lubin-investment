@@ -7,6 +7,7 @@ import { AuthPage } from './pages/AuthPage.js';
 import { RequireAuth } from './components/RequireAuth.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { useToast } from './components/Toast.js';
+import { Logo } from './components/ui/primitives.js';
 
 export function App() {
   const { pathname } = useLocation();
@@ -16,12 +17,8 @@ export function App() {
   return (
     <>
       <header className="app-header">
-        <Link to="/" className="logo">
-          <div className="logo-mark">LI</div>
-          <div>
-            <div className="logo-text">Lubin Investment</div>
-            <div className="logo-sub">Analyse fondamentale</div>
-          </div>
+        <Link to="/" className="logo" aria-label="Accueil Lubin Investment">
+          <Logo size={28} />
         </Link>
         <UserMenu />
       </header>

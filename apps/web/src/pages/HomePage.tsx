@@ -1,92 +1,98 @@
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.js';
+import { Icon, type IconName } from '../components/ui/primitives.js';
+import { HeroPreview } from '../components/ui/HeroPreview.js';
 import './HomePage.css';
 
-/**
- * Page d'accueil commerciale (route `/`). Décrit l'app et ses bénéfices, avec des CTA
- * vers l'outil d'analyse et le screener. Public — c'est la vitrine du produit.
- */
+const BENEFITS: { icon: IconName; title: string; text: string }[] = [
+  { icon: 'bars', title: 'Des chiffres, pas du bla-bla', text: '10 critères financiers objectifs calculés en quelques secondes. La donnée tranche, pas les opinions.' },
+  { icon: 'pulse', title: 'Toute la cote, surveillée', text: 'Une veille automatique note en continu l\'univers boursier et fait remonter les meilleures entreprises.' },
+  { icon: 'shield', title: 'La méthode des grands investisseurs', text: 'Rentabilité, croissance, qualité du bilan : les critères des compounders de long terme.' },
+  { icon: 'scale', title: 'Qualité et prix, séparés', text: 'La qualité du business et le prix d\'entrée sont jugés indépendamment. Jamais l\'un pour l\'autre.' },
+];
+
+const STEPS: { n: string; title: string; text: string }[] = [
+  { n: '01', title: 'Tapez un ticker', text: 'Entrez le symbole d\'une action. La note de qualité s\'affiche en quelques secondes.' },
+  { n: '02', title: 'Lisez la note et sa composition', text: 'Une note sur 10, sa répartition vert/orange/rouge, et le détail des 10 critères.' },
+  { n: '03', title: 'Décidez du prix d\'entrée', text: 'Ajustez vos hypothèses pour obtenir le prix d\'achat conseillé, séparé de la qualité.' },
+];
+
 export function HomePage() {
   const { user } = useAuth();
-
   return (
     <div className="home">
       {/* ── Hero ── */}
       <section className="home-hero">
-        <div className="home-badge">Analyse fondamentale, sans le bruit</div>
-        <h1 className="home-title">
-          Repérez les entreprises de <span className="home-accent">qualité</span>,<br />
-          notées sur des chiffres — pas sur des opinions.
-        </h1>
-        <p className="home-lede">
-          Tapez un ticker, obtenez une <strong>note quantitative /10</strong> en un instant : rentabilité,
-          croissance du cash, retour sur capital, solidité du bilan, valorisation. Une méthode inspirée de
-          Buffett et Bettin/Mauboussin, appliquée automatiquement.
-        </p>
-        <div className="home-cta-row">
-          <Link to="/analyser" className="btn-primary home-cta">Analyser une action</Link>
-          <Link to="/screener" className="btn-secondary home-cta">Explorer le screener</Link>
+        <div className="home-hero-halo" aria-hidden="true" />
+        <div className="home-hero-grid wrap">
+          <div className="home-hero-left fade-up">
+            <span className="chip home-chip" data-active="true">Analyse fondamentale automatisée</span>
+            <h1 className="home-title">
+              Trouvez les entreprises de qualité,<br />
+              <span className="home-accent">sans le bruit.</span>
+            </h1>
+            <p className="home-lede">
+              Tapez un ticker, obtenez une note de qualité sur 10 calculée sur des critères financiers
+              objectifs. Une valorisation jugée séparément. Et une veille qui note tout le marché pour vous.
+            </p>
+            <div className="row gap-12" style={{ flexWrap: 'wrap' }}>
+              <Link to="/analyser" className="btn btn-brand btn-lg">Analyser une action <Icon name="arrowRight" size={17} /></Link>
+              <Link to="/screener" className="btn btn-ghost btn-lg">Explorer le screener</Link>
+            </div>
+            <div className="home-stats">
+              <div><span className="num home-stat-n">10</span><span className="home-stat-l">critères chiffrés</span></div>
+              <div><span className="num home-stat-n">6&nbsp;200+</span><span className="home-stat-l">titres surveillés</span></div>
+              <div><span className="num home-stat-n">&lt; 3 s</span><span className="home-stat-l">par analyse</span></div>
+            </div>
+          </div>
+          <div className="home-hero-right fade-up">
+            <HeroPreview />
+          </div>
         </div>
       </section>
 
       {/* ── Bénéfices ── */}
-      <section className="home-section">
-        <h2 className="home-h2">Pourquoi cet outil</h2>
+      <section className="wrap home-section">
         <div className="home-cards">
-          <div className="home-card">
-            <div className="home-card-title">Des chiffres, pas du bla-bla</div>
-            <p>Une note /10 calculée sur 10 critères de qualité objectifs (marges, cash-flows, ROCE, dette…). Fini les avis subjectifs : la donnée tranche.</p>
-          </div>
-          <div className="home-card">
-            <div className="home-card-title">Une veille de tout le marché</div>
-            <p>L'app note en continu et automatiquement l'univers des actions. Vous découvrez directement les mieux notées au lieu de chercher ticker par ticker.</p>
-          </div>
-          <div className="home-card">
-            <div className="home-card-title">La méthode des grands investisseurs</div>
-            <p>Cash ROCE, free cash flow par action ajusté, croissance organique, moat… les critères qui comptent vraiment sur le long terme — chacun expliqué.</p>
-          </div>
-          <div className="home-card">
-            <div className="home-card-title">Qualité et prix séparés</div>
-            <p>La qualité du business et le bon prix d'entrée sont jugés séparément. Une excellente entreprise reste excellente — il suffit d'attendre le bon moment.</p>
-          </div>
+          {BENEFITS.map(b => (
+            <div key={b.title} className="home-card">
+              <div className="home-card-icon"><Icon name={b.icon} size={21} /></div>
+              <div className="home-card-title">{b.title}</div>
+              <p>{b.text}</p>
+            </div>
+          ))}
         </div>
       </section>
 
       {/* ── Comment ça marche ── */}
-      <section className="home-section">
-        <h2 className="home-h2">Comment ça marche</h2>
-        <div className="home-steps">
-          <div className="home-step">
-            <div className="home-step-num">1</div>
-            <div>
-              <div className="home-step-title">Tapez un ticker</div>
-              <p>AAPL, MSFT, ASML… L'app récupère les fondamentaux et calcule la note en quelques secondes.</p>
-            </div>
+      <section className="home-how">
+        <div className="wrap">
+          <div className="home-how-head">
+            <span className="kicker">Comment ça marche</span>
+            <h2 className="home-h2">Une action jugée en un coup d'œil</h2>
           </div>
-          <div className="home-step">
-            <div className="home-step-num">2</div>
-            <div>
-              <div className="home-step-title">Lisez la note /10</div>
-              <p>Chaque critère est noté OUI / PARTIEL / NON, avec une explication du pourquoi et du comment. Cliquez pour voir l'historique.</p>
-            </div>
-          </div>
-          <div className="home-step">
-            <div className="home-step-num">3</div>
-            <div>
-              <div className="home-step-title">Suivez les meilleures</div>
-              <p>Ajoutez vos favorites à la watchlist et laissez le screener faire remonter les 10/10 du marché entier.</p>
-            </div>
+          <div className="home-steps">
+            {STEPS.map(s => (
+              <div key={s.n} className="home-step">
+                <div className="num home-step-num">{s.n}</div>
+                <div className="home-step-title">{s.title}</div>
+                <p>{s.text}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
       {/* ── CTA final ── */}
-      <section className="home-final">
-        <h2 className="home-final-title">Prêt à analyser ?</h2>
-        <p className="home-final-sub">Gratuit, instantané, sans installation.</p>
-        <div className="home-cta-row">
-          <Link to="/analyser" className="btn-primary home-cta">Analyser une action</Link>
-          {!user && <Link to="/signup" className="btn-secondary home-cta">Créer un compte</Link>}
+      <section className="wrap" style={{ padding: '24px 28px 64px' }}>
+        <div className="home-final">
+          <div className="home-final-halo" aria-hidden="true" />
+          <h2 className="home-final-title">Trouvez les 10/10 sans les chercher</h2>
+          <p className="home-final-sub">La veille note l'univers en continu — vous récoltez les meilleures.</p>
+          <div className="row gap-12 center" style={{ flexWrap: 'wrap' }}>
+            <Link to="/analyser" className="btn btn-brand btn-lg">Analyser une action</Link>
+            {!user && <Link to="/signup" className="btn home-cta-light btn-lg">Créer un compte</Link>}
+          </div>
         </div>
       </section>
     </div>
