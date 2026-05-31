@@ -28,7 +28,7 @@
 
 .toast-info { border-left-color: var(--text2); }
 .toast-success { border-left-color: var(--green); }
-.toast-error { border-left-color: var(--brand); }
+.toast-error { border-left-color: var(--red); }
 .toast-warn { border-left-color: var(--orange); }
 
 .toast-message {

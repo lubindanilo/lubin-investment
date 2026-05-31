@@ -28,7 +28,7 @@ export function ScoreCard({ analysis, onAddWatchlist, alreadyInWatchlist }: {
             {alreadyInWatchlist ? 'Dans ta watchlist' : 'Ajouter à la watchlist'}
           </button>
         </div>
-        <p className="verdict-direct">{analysis.verdict_direct}</p>
+        {analysis.verdict_direct?.trim() && <p className="verdict-direct">{analysis.verdict_direct}</p>}
       </div>
     </div>
   );

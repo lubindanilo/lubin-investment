@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import type { AnalyzeResponse, ValoParams, ValuationResult } from '@lubin/shared';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import type { AnalyzeResponse, ValoParams, ValuationResult, ScreenerTopRow, ScreenerStats } from '@lubin/shared';
 import { api, ApiError } from '../lib/api.js';
 import { useToast } from '../components/Toast.js';
 import { useAuth } from '../contexts/AuthContext.js';
@@ -136,7 +136,7 @@ export function AnalysePage() {
   return (
     <>
       <h1 className="section-title">Analyser une entreprise</h1>
-      <p className="section-sub">Tape un ticker — 25 critères qualité (chiffres + business + management) + valorisation séparée.</p>
+      <p className="section-sub">Note quantitative /10 instantanée à partir d'un ticker — analyse qualitative et valorisation en option.</p>
 
       <div className="search-wrap">
         <input
@@ -159,6 +159,10 @@ export function AnalysePage() {
       )}
 
       {loading && !analysis && <AnalyseLoadingState />}
+
+      {!loading && !analysis && !error && (
+        <LandingDiscovery onPick={(t) => { setTicker(t); run(t); }} />
+      )}
 
       {analysis && (
         <>
@@ -226,14 +230,12 @@ export function AnalysePage() {
               <CriteriaGrid items={management} />
             </>
           ) : (
-            <div className="qual-cta">
-              <div className="qual-cta-title">Analyse qualitative pas encore générée</div>
-              <div className="qual-cta-text">
-                Les 15 critères qualitatifs (business model + management) sont calculés via GPT-4 avec recherche web (~10 s, déclenche un appel API payant).
-                <br/>Une fois généré, le <strong>business model est cache à vie</strong> (immutable) et le <strong>management peut être rafraîchi manuellement</strong>.
-              </div>
-              <button className="btn-primary qual-cta-btn" onClick={generateQualitative} disabled={generatingQual}>
-                {generatingQual ? <><span className="spinner" /> Génération en cours…</> : 'Générer l\'analyse qualitative'}
+            <div className="qual-cta-slim">
+              <span className="qual-cta-slim-text">
+                Analyse qualitative (business model + management) — optionnelle, générée à la demande.
+              </span>
+              <button className="btn-secondary qual-cta-slim-btn" onClick={generateQualitative} disabled={generatingQual}>
+                {generatingQual ? <><span className="spinner" /> Génération…</> : 'Générer'}
               </button>
             </div>
           )}
@@ -259,26 +261,92 @@ export function AnalysePage() {
   );
 }
 
+/** Skeleton de la page analyse (fantôme de la score-card + grille de critères). */
 function AnalyseLoadingState() {
-  // L'analyse quant est rapide (~1-2 s). Plus de GPT dans le flow, plus besoin du
-  // tracker de progression multi-étapes. Spinner + compteur de secondes suffit.
-  const [elapsedMs, setElapsedMs] = useState(0);
+  return (
+    <div className="analyse-skeleton" aria-busy="true" aria-label="Analyse en cours">
+      <div className="skel-scorecard">
+        <div className="skeleton skel-circle" />
+        <div className="skel-lines">
+          <div className="skeleton skel-line skel-line-lg" />
+          <div className="skeleton skel-line skel-line-md" />
+        </div>
+      </div>
+      <div className="skeleton skel-section-title" />
+      <div className="skel-grid">
+        {Array.from({ length: 6 }).map((_, i) => <div key={i} className="skeleton skel-card" />)}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Vitrine d'accueil : met en avant les entreprises les mieux notées par la veille,
+ * pour découvrir directement les pépites plutôt que de chercher un ticker à l'aveugle.
+ */
+function LandingDiscovery({ onPick }: { onPick: (ticker: string) => void }) {
+  const [picks, setPicks] = useState<ScreenerTopRow[]>([]);
+  const [stats, setStats] = useState<ScreenerStats | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
   useEffect(() => {
-    const start = Date.now();
-    const id = setInterval(() => setElapsedMs(Date.now() - start), 250);
-    return () => clearInterval(id);
+    let cancelled = false;
+    Promise.all([
+      api.screener.top({ minRatio: 0.9, minMax: 8, limit: 8 }).catch(() => [] as ScreenerTopRow[]),
+      api.screener.stats().catch(() => null),
+    ]).then(([p, s]) => {
+      if (cancelled) return;
+      setPicks(p);
+      setStats(s);
+      setLoaded(true);
+    });
+    return () => { cancelled = true; };
   }, []);
 
   return (
-    <div className="empty-state">
-      <div className="empty-state-icon"><span className="spinner" /></div>
-      <div className="empty-state-text">
-        Analyse en cours…{' '}
-        <span style={{ color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>
-          ({(elapsedMs / 1000).toFixed(1)}s)
-        </span>
+    <section className="landing">
+      <div className="landing-head">
+        <h2 className="landing-title">Les mieux notées</h2>
+        {stats && stats.scored > 0 && (
+          <Link to="/screener" className="landing-seeall">
+            {stats.scored.toLocaleString('fr-FR')} entreprises analysées · voir le screener →
+          </Link>
+        )}
       </div>
-    </div>
+
+      {!loaded ? (
+        <div className="landing-grid">
+          {Array.from({ length: 8 }).map((_, i) => <div key={i} className="skeleton landing-card-skel" />)}
+        </div>
+      ) : picks.length === 0 ? (
+        <div className="landing-empty">
+          La veille démarre — les meilleures notes apparaîtront ici au fil de l'eau. En attendant,
+          essaie un ticker ci-dessus :{' '}
+          <button className="landing-ex" onClick={() => onPick('AAPL')}>AAPL</button>,{' '}
+          <button className="landing-ex" onClick={() => onPick('MSFT')}>MSFT</button>,{' '}
+          <button className="landing-ex" onClick={() => onPick('ASML')}>ASML</button>.
+        </div>
+      ) : (
+        <div className="landing-grid">
+          {picks.map(p => {
+            const ratio = p.scoreChiffresMax ? (p.scoreChiffres ?? 0) / p.scoreChiffresMax : 0;
+            const cls = ratio >= 1 ? 'top' : ratio >= 0.8 ? 'high' : 'mid';
+            return (
+              <button key={p.ticker} className="landing-card" onClick={() => onPick(p.ticker)}>
+                <div className="landing-card-top">
+                  <span className="landing-card-ticker">{p.ticker}</span>
+                  <span className={`landing-card-score ${cls}`}>{p.scoreChiffres}/{p.scoreChiffresMax}</span>
+                </div>
+                <div className="landing-card-name">{p.name ?? p.ticker}</div>
+                {p.pfcfTTM != null && p.pfcfTTM > 0 && (
+                  <div className="landing-card-pfcf">P/FCF {p.pfcfTTM.toFixed(1)}×</div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 

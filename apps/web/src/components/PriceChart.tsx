@@ -140,7 +140,7 @@ export function PriceChart({ ticker, currency }: Props) {
               <Line
                 type="monotone"
                 dataKey="value"
-                stroke={stats && stats.change >= 0 ? 'var(--green)' : 'var(--brand)'}
+                stroke={stats && stats.change >= 0 ? 'var(--green)' : 'var(--red)'}
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4 }}
