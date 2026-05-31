@@ -79,14 +79,12 @@ export function CriteriaGrid({ items, ticker, currency, annualOnly }: {
 /** Carte qualitative compacte (business/management) : label + statut + réponse courte + note.
  *  Pas de grande valeur chiffrée ni de graphique — les réponses sont textuelles. */
 function QualCard({ c }: { c: Criterion }) {
-  const showValue = c.valeur && c.valeur !== 'N/A' && c.valeur.trim() !== '';
   return (
     <div className="qual-card">
       <div className="qual-card-head">
         <span className="qual-card-label">{c.nom}</span>
         <StatusBadge status={toDataStatus(c.statut)} />
       </div>
-      {showValue && <div className="qual-card-value">{c.valeur}</div>}
       {c.explication && <p className="qual-card-note">{c.explication}</p>}
     </div>
   );
