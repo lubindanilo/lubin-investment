@@ -1,23 +1,38 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import type { AnalyzeResponse, ValoParams, ValuationResult, ScreenerTopRow, ScreenerStats } from '@lubin/shared';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import type { AnalyzeResponse, ValoParams, ValuationResult, ScreenerTopRow, Criterion } from '@lubin/shared';
 import { api, ApiError } from '../lib/api.js';
 import { useToast } from '../components/Toast.js';
 import { useAuth } from '../contexts/AuthContext.js';
-import { ScoreCard } from '../components/ScoreCard.js';
 import { CriteriaGrid } from '../components/CriterionCard.js';
-import { SectionHeader } from '../components/SectionHeader.js';
 import { ValuationPanel } from '../components/ValuationPanel.js';
 import { NewsPanel } from '../components/NewsPanel.js';
-import { TradingViewChart } from '../components/TradingViewChart.js';
-import { PriceChart } from '../components/PriceChart.js';
 import { EarningsPanel } from '../components/EarningsPanel.js';
+import { Icon, ScoreCircle, ScorePill, scoreColor, toDataStatus } from '../components/ui/primitives.js';
+import { CompositionBar, PriceChart } from '../components/ui/charts.js';
 import './AnalysePage.css';
+
+const HORIZONS: Record<string, { years: number; interval: '1d' | '1wk' | '1mo' }> = {
+  '1A': { years: 1, interval: '1wk' },
+  '5A': { years: 5, interval: '1mo' },
+  '10A': { years: 10, interval: '1mo' },
+  'Tout': { years: 30, interval: '1mo' },
+};
 
 function scoreOf(items: { statut: 'pass' | 'fail' | 'warn' }[]) {
   const pass = items.filter(c => c.statut === 'pass').length;
   const warn = items.filter(c => c.statut === 'warn').length;
   return `${pass + Math.round(warn * 0.5)}/${items.length}`;
+}
+/** Note ramenée sur 10 (le path Yahoo peut avoir moins de critères évaluables). */
+function score10(items: Criterion[]): number {
+  if (items.length === 0) return 0;
+  const pass = items.filter(c => c.statut === 'pass').length;
+  const warn = items.filter(c => c.statut === 'warn').length;
+  return Math.round(((pass + 0.5 * warn) / items.length) * 10);
+}
+function compositionCounts(items: Criterion[]) {
+  return items.reduce((a, c) => { a[toDataStatus(c.statut)]++; return a; }, { good: 0, warn: 0, bad: 0 });
 }
 
 export function AnalysePage() {
@@ -31,43 +46,32 @@ export function AnalysePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [refreshingQual, setRefreshingQual] = useState(false);
+  const [generatingQual, setGeneratingQual] = useState(false);
   const [inWatchlist, setInWatchlist] = useState<Set<string>>(new Set());
-  const [lastTicker, setLastTicker] = useState<string>('');
+  const [lastTicker, setLastTicker] = useState('');
 
-  // L'appartenance à la watchlist vient désormais de la réponse analyze elle-même
-  // (analysis.inWatchlist, calculé côté serveur) → fini les faux "Ajouter" quand un
-  // second fetch de la watchlist échouait. Le set local ne sert plus qu'au flip
-  // optimiste juste après un clic "Ajouter". On le vide au changement d'utilisateur.
   useEffect(() => { setInWatchlist(new Set()); }, [user]);
 
   const run = useCallback(async (t: string) => {
     if (!t.trim()) return;
     const cleaned = t.trim().toUpperCase();
-    setLoading(true);
-    setError(null);
-    setAnalysis(null);
-    setLastTicker(cleaned);
+    setLoading(true); setError(null); setAnalysis(null); setLastTicker(cleaned);
+    window.scrollTo({ top: 0 });
     try {
-      const data = await api.analyze(cleaned);
-      setAnalysis(data);
+      setAnalysis(await api.analyze(cleaned));
     } catch (e) {
-      const err = e instanceof ApiError ? e : new ApiError(0, (e as Error).message);
-      setError(err);
+      setError(e instanceof ApiError ? e : new ApiError(0, (e as Error).message));
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (routeTicker) {
-      setTicker(routeTicker.toUpperCase());
-      run(routeTicker.toUpperCase());
-    }
+    if (routeTicker) { setTicker(routeTicker.toUpperCase()); run(routeTicker.toUpperCase()); }
   }, [routeTicker, run]);
 
   async function addToWatchlist() {
     if (!analysis) return;
-    // Pas connecté → on envoie vers /login en mémorisant la page courante
     if (!user) {
       navigate('/login', { state: { from: `/analyse/${analysis.ticker}` } });
       toast.push('warn', 'Connecte-toi pour gérer ta watchlist');
@@ -77,301 +81,373 @@ export function AnalysePage() {
       await api.watchlist.add(analysis.ticker);
       setInWatchlist(prev => new Set(prev).add(analysis.ticker));
       toast.push('success', `${analysis.ticker} ajouté à la watchlist`);
-    } catch (e) {
-      toast.push('error', (e as Error).message);
-    }
+    } catch (e) { toast.push('error', (e as Error).message); }
   }
-
-  // État "génération en cours" pour le bouton "Générer l'analyse qualitative"
-  const [generatingQual, setGeneratingQual] = useState(false);
 
   async function generateQualitative() {
     if (!analysis) return;
     setGeneratingQual(true);
-    try {
-      const data = await api.generateQualitative(analysis.ticker);
-      setAnalysis(data);
-      toast.push('success', 'Analyse qualitative générée');
-    } catch (e) {
-      toast.push('error', (e as Error).message);
-    } finally {
-      setGeneratingQual(false);
-    }
+    try { setAnalysis(await api.generateQualitative(analysis.ticker)); toast.push('success', 'Analyse qualitative générée'); }
+    catch (e) { toast.push('error', (e as Error).message); }
+    finally { setGeneratingQual(false); }
   }
 
   async function refreshManagementOnly() {
     if (!analysis) return;
     setRefreshingQual(true);
-    try {
-      const data = await api.refreshManagement(analysis.ticker);
-      setAnalysis(data);
-      toast.push('success', 'Données management mises à jour');
-    } catch (e) {
-      toast.push('error', (e as Error).message);
-    } finally {
-      setRefreshingQual(false);
-    }
+    try { setAnalysis(await api.refreshManagement(analysis.ticker)); toast.push('success', 'Données management mises à jour'); }
+    catch (e) { toast.push('error', (e as Error).message); }
+    finally { setRefreshingQual(false); }
   }
 
   function onValuationChanged(valuation: ValuationResult, params: ValoParams) {
     if (!analysis) return;
-    // Le score ne dépend PAS de la valorisation (cf. backend) — on met juste à jour
-    // la dernière entrée du tableau criteres (= buy price) et on garde le score actuel.
     const criteres = [...analysis.criteres.slice(0, -1), valuation];
     setAnalysis({ ...analysis, criteres, valuation, valoParams: params });
   }
 
-  // Structure du tableau criteres (cf. backend buildResponse) :
-  //   [0..9]    chiffres (10)
-  //   [10..19]  business (10) — vide si qualitatif pas encore généré
-  //   [20..24]  management (5) — vide si qualitatif pas encore généré
-  //   [25, 26]  valorisation = [P/FCF actuel, Buy price]
-  // La valorisation n'entre PAS dans le score (timing d'entrée ≠ qualité business).
   const chiffres = analysis?.criteres.slice(0, 10) ?? [];
   const business = analysis?.qualitativeAvailable ? analysis.criteres.slice(10, 20) : [];
   const management = analysis?.qualitativeAvailable ? analysis.criteres.slice(20, 25) : [];
-  // Les 2 cartes valorisation (P/FCF + buy price). Toujours présentes.
   const valuationCards = analysis?.criteres.slice(-2) ?? [];
+  const watched = !!analysis && (analysis.inWatchlist === true || inWatchlist.has(analysis.ticker));
 
   return (
-    <>
-      <h1 className="section-title">Analyser une entreprise</h1>
-      <p className="section-sub">Note quantitative /10 instantanée à partir d'un ticker — analyse qualitative et valorisation en option.</p>
-
-      <div className="search-wrap">
-        <input
-          className="input"
-          placeholder="Ex : MEDP, ADBE, AAPL, QLYS"
-          value={ticker}
-          onChange={e => setTicker(e.target.value.toUpperCase())}
-          onKeyDown={e => e.key === 'Enter' && run(ticker)}
-        />
-        <button className="btn-primary" onClick={() => run(ticker)} disabled={loading || !ticker.trim()}>
-          {loading ? <><span className="spinner" /> Analyse…</> : 'Analyser'}
-        </button>
-      </div>
-
-      {error && (
-        <ErrorState
-          error={error}
-          onRetry={lastTicker ? () => run(lastTicker) : undefined}
-        />
-      )}
-
-      {loading && !analysis && <AnalyseLoadingState />}
-
-      {!loading && !analysis && !error && (
-        <LandingDiscovery onPick={(t) => { setTicker(t); run(t); }} />
-      )}
-
-      {analysis && (
-        <>
-          {!analysis.fundamentalsAvailable && (
-            <div className="fund-missing-banner">
-              <div className="fund-missing-title">Données fondamentales indisponibles pour {analysis.ticker}</div>
-              <div className="fund-missing-hint">
-                Ce titre n'est pas couvert. S'il a une cotation ADR US (ex : <code>NSRGY</code>, <code>ASML</code>, <code>LVMUY</code>), essaie ce symbole à la place.
-              </div>
-            </div>
+    <div className="anl">
+      <div className="wrap anl-wrap">
+        <div className="anl-search-block">
+          <SearchBar value={ticker} onChange={setTicker} onSubmit={run} loading={loading} />
+          {!loading && !analysis && !error && (
+            <span className="tiny muted anl-hint">Astuce : tape un ticker comme <b>AAPL</b>, <b>MSFT</b> ou <b>ASML</b>.</span>
           )}
-
-          <ScoreCard
-            analysis={analysis}
-            onAddWatchlist={addToWatchlist}
-            alreadyInWatchlist={analysis.inWatchlist === true || inWatchlist.has(analysis.ticker)}
-          />
-
-          {analysis.fundamentalsSource === 'yahoo' ? (
-            // Tickers EU résolus via Yahoo : TradingView ne reconnaît pas COPN sans préfixe
-            // SIX:COPN. On affiche notre propre chart Recharts avec données Yahoo /v8/chart
-            // (qui a 20-30 ans de prix pour les EU, contre 4 ans pour les fundamentals).
-            <PriceChart ticker={analysis.ticker} currency={analysis.currency} />
-          ) : analysis.fundamentalsAvailable ? (
-            <TradingViewChart ticker={analysis.ticker} />
-          ) : (
-            <div className="chart-section chart-unavailable">
-              <div className="chart-title"><span>Cours boursier — {analysis.ticker}</span></div>
-              <div className="chart-unavailable-msg">
-                Graphique non disponible pour le symbole <code>{analysis.ticker}</code>.
-              </div>
-            </div>
-          )}
-
-          <SectionHeader title="Chiffres (10)" score={scoreOf(chiffres)} />
-          <CriteriaGrid items={chiffres} ticker={analysis.ticker} currency={analysis.currency} annualOnly={analysis.fundamentalsSource === 'yahoo'} />
-
-          <EarningsPanel ticker={analysis.ticker} earnings={analysis.earnings} currency={analysis.currency} />
-
-          {analysis.qualitativeAvailable ? (
-            <>
-              <SectionHeader title="Business model (10)" score={scoreOf(business)} />
-              <CriteriaGrid items={business} />
-
-              <SectionHeader
-                title="Management (5)"
-                score={scoreOf(management)}
-                right={
-                  <button className="btn-secondary" onClick={refreshManagementOnly} disabled={refreshingQual}>
-                    {refreshingQual ? <><span className="spinner" /> Mise à jour…</> : '↻ Rafraîchir le Management'}
-                  </button>
-                }
-              />
-              <CriteriaGrid items={management} />
-            </>
-          ) : (
-            <div className="qual-cta-slim">
-              <span className="qual-cta-slim-text">
-                Analyse qualitative (business model + management) — optionnelle, générée à la demande.
-              </span>
-              <button className="btn-secondary qual-cta-slim-btn" onClick={generateQualitative} disabled={generatingQual}>
-                {generatingQual ? <><span className="spinner" /> Génération…</> : 'Générer'}
-              </button>
-            </div>
-          )}
-
-          <SectionHeader
-            title="Valorisation"
-            sub="Le bon prix d'entrée — n'entre pas dans la note qualité."
-          />
-          {valuationCards.length === 2 && (
-            <CriteriaGrid
-              items={valuationCards}
-              ticker={analysis.ticker}
-              currency={analysis.currency}
-              annualOnly={analysis.fundamentalsSource === 'yahoo'}
-            />
-          )}
-          <ValuationPanel analysis={analysis} onValuationChanged={onValuationChanged} />
-
-          <NewsPanel ticker={analysis.ticker} news={analysis.news} />
-        </>
-      )}
-    </>
-  );
-}
-
-/** Skeleton de la page analyse (fantôme de la score-card + grille de critères). */
-function AnalyseLoadingState() {
-  return (
-    <div className="analyse-skeleton" aria-busy="true" aria-label="Analyse en cours">
-      <div className="skel-scorecard">
-        <div className="skeleton skel-circle" />
-        <div className="skel-lines">
-          <div className="skeleton skel-line skel-line-lg" />
-          <div className="skeleton skel-line skel-line-md" />
         </div>
-      </div>
-      <div className="skeleton skel-section-title" />
-      <div className="skel-grid">
-        {Array.from({ length: 6 }).map((_, i) => <div key={i} className="skeleton skel-card" />)}
+
+        {error && <ErrorState error={error} ticker={lastTicker} onRetry={() => { setError(null); setAnalysis(null); }} />}
+        {loading && !analysis && <LoadingState />}
+        {!loading && !analysis && !error && <LandingDiscovery onPick={(t) => { setTicker(t); run(t); }} />}
+
+        {analysis && (
+          <AnalysisView
+            analysis={analysis}
+            chiffres={chiffres}
+            business={business}
+            management={management}
+            valuationCards={valuationCards}
+            watched={watched}
+            onWatch={addToWatchlist}
+            onGenerateQual={generateQualitative}
+            generatingQual={generatingQual}
+            refreshingQual={refreshingQual}
+            onRefreshMgmt={refreshManagementOnly}
+            onValuationChanged={onValuationChanged}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-/**
- * Vitrine d'accueil : met en avant les entreprises les mieux notées par la veille,
- * pour découvrir directement les pépites plutôt que de chercher un ticker à l'aveugle.
- */
-function LandingDiscovery({ onPick }: { onPick: (ticker: string) => void }) {
-  const [picks, setPicks] = useState<ScreenerTopRow[]>([]);
-  const [stats, setStats] = useState<ScreenerStats | null>(null);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      api.screener.top({ minRatio: 0.9, minMax: 8, limit: 8 }).catch(() => [] as ScreenerTopRow[]),
-      api.screener.stats().catch(() => null),
-    ]).then(([p, s]) => {
-      if (cancelled) return;
-      setPicks(p);
-      setStats(s);
-      setLoaded(true);
-    });
-    return () => { cancelled = true; };
-  }, []);
-
+// ─── Barre de recherche ──────────────────────────────────────────────────────
+function SearchBar({ value, onChange, onSubmit, loading }: {
+  value: string; onChange: (v: string) => void; onSubmit: (v: string) => void; loading: boolean;
+}) {
   return (
-    <section className="landing">
-      <div className="landing-head">
-        <h2 className="landing-title">Les mieux notées</h2>
-        {stats && stats.scored > 0 && (
-          <Link to="/screener" className="landing-seeall">
-            {stats.scored.toLocaleString('fr-FR')} entreprises analysées · voir le screener →
-          </Link>
-        )}
+    <form className="anl-search" onSubmit={(e) => { e.preventDefault(); onSubmit(value); }}>
+      <div className="anl-search-field">
+        <Icon name="search" size={18} className="anl-search-icon" />
+        <input className="anl-search-input num" value={value} onChange={(e) => onChange(e.target.value.toUpperCase())}
+          placeholder="Entrez un ticker — ex. AAPL, MSFT, ASML…" />
       </div>
+      <button type="submit" className="btn btn-brand" style={{ height: 48 }} disabled={loading || !value.trim()}>
+        {loading ? 'Analyse…' : <>Analyser <Icon name="arrowRight" size={17} /></>}
+      </button>
+    </form>
+  );
+}
 
-      {!loaded ? (
-        <div className="landing-grid">
-          {Array.from({ length: 8 }).map((_, i) => <div key={i} className="skeleton landing-card-skel" />)}
+// ─── Section (titre + sous-titre + slot droit) ───────────────────────────────
+function Section({ title, sub, right, children }: {
+  title: string; sub?: string; right?: React.ReactNode; children: React.ReactNode;
+}) {
+  return (
+    <section className="anl-section">
+      <div className="anl-section-head">
+        <div className="col gap-2">
+          <h2 className="anl-section-title">{title}</h2>
+          {sub && <span className="tiny muted">{sub}</span>}
         </div>
-      ) : picks.length === 0 ? (
-        <div className="landing-empty">
-          La veille démarre — les meilleures notes apparaîtront ici au fil de l'eau. En attendant,
-          essaie un ticker ci-dessus :{' '}
-          <button className="landing-ex" onClick={() => onPick('AAPL')}>AAPL</button>,{' '}
-          <button className="landing-ex" onClick={() => onPick('MSFT')}>MSFT</button>,{' '}
-          <button className="landing-ex" onClick={() => onPick('ASML')}>ASML</button>.
-        </div>
-      ) : (
-        <div className="landing-grid">
-          {picks.map(p => {
-            const ratio = p.scoreChiffresMax ? (p.scoreChiffres ?? 0) / p.scoreChiffresMax : 0;
-            const cls = ratio >= 1 ? 'top' : ratio >= 0.8 ? 'high' : 'mid';
-            return (
-              <button key={p.ticker} className="landing-card" onClick={() => onPick(p.ticker)}>
-                <div className="landing-card-top">
-                  <span className="landing-card-ticker">{p.ticker}</span>
-                  <span className={`landing-card-score ${cls}`}>{p.scoreChiffres}/{p.scoreChiffresMax}</span>
-                </div>
-                <div className="landing-card-name">{p.name ?? p.ticker}</div>
-                {p.pfcfTTM != null && p.pfcfTTM > 0 && (
-                  <div className="landing-card-pfcf">P/FCF {p.pfcfTTM.toFixed(1)}×</div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
+        {right}
+      </div>
+      {children}
     </section>
   );
 }
 
-function ErrorState({ error, onRetry }: { error: ApiError; onRetry?: () => void }) {
-  // 400/404 → message simple. 429 → message rate limit. 0/500+ → message + bouton retry.
-  let title: string;
-  let hint: string;
-  if (error.status === 404) {
-    title = 'Ticker non détecté';
-    hint = error.details ?? error.userMessage;
-  } else if (error.status === 429) {
-    title = 'Trop de requêtes — patiente une minute';
-    hint = 'Tu as atteint le rate limit. Réessaie dans 60 secondes.';
-  } else if (error.status === 0) {
-    title = 'Connexion serveur impossible';
-    hint = 'Vérifie que l\'API tourne (pnpm dev:api) puis réessaie.';
-  } else if (error.status >= 500) {
-    title = 'Erreur côté serveur';
-    hint = 'Le serveur a renvoyé une erreur. Réessaie dans quelques secondes.';
-  } else if (error.status === 400) {
-    title = 'Ticker invalide';
-    hint = 'Vérifie le ticker (lettres majuscules, max 8 caractères).';
-  } else {
-    title = 'Erreur';
-    hint = error.userMessage;
-  }
+// ─── Vue remplie ─────────────────────────────────────────────────────────────
+function AnalysisView({ analysis, chiffres, business, management, valuationCards, watched, onWatch, onGenerateQual, generatingQual, refreshingQual, onRefreshMgmt, onValuationChanged }: {
+  analysis: AnalyzeResponse;
+  chiffres: Criterion[]; business: Criterion[]; management: Criterion[]; valuationCards: Criterion[];
+  watched: boolean; onWatch: () => void; onGenerateQual: () => void; generatingQual: boolean;
+  refreshingQual: boolean; onRefreshMgmt: () => void;
+  onValuationChanged: (v: ValuationResult, p: ValoParams) => void;
+}) {
+  const scoreRef = useRef<HTMLDivElement>(null);
+  const [stickyVisible, setStickyVisible] = useState(false);
+  useEffect(() => {
+    const onScroll = () => { if (scoreRef.current) setStickyVisible(scoreRef.current.getBoundingClientRect().bottom < 70); };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const s10 = score10(chiffres);
+  const counts = compositionCounts(chiffres);
+  const tone = scoreColor(s10);
+  const currency = analysis.currency || 'USD';
+  const annualOnly = analysis.fundamentalsSource === 'yahoo';
+
   return (
-    <div className="error-box">
-      <div className="error-box-title">{title}</div>
-      <div className="error-box-hint">{hint}</div>
-      {error.status !== 404 && error.details && <div className="error-box-details">{error.details}</div>}
-      {error.retriable && onRetry && (
-        <button className="btn-secondary" onClick={onRetry} style={{ marginTop: 12 }}>
-          ↻ Réessayer
-        </button>
-      )}
+    <>
+      <StickyScoreBar analysis={analysis} score={s10} tone={tone} visible={stickyVisible} watched={watched} onWatch={onWatch} />
+      <div className="col gap-28 fade-up anl-filled">
+        {!analysis.fundamentalsAvailable && (
+          <div className="anl-banner">
+            <Icon name="shield" size={16} />
+            <span>Données fondamentales indisponibles pour <b>{analysis.ticker}</b>. Ce titre n'est pas couvert — essaie une cotation ADR US si elle existe.</span>
+          </div>
+        )}
+
+        {/* ScoreCard */}
+        <div ref={scoreRef} className="card anl-scorecard">
+          <ScoreCircle score={s10} />
+          <div className="col gap-12 grow">
+            <div className="anl-scorecard-head">
+              <div className="col gap-4">
+                <div className="row gap-10">
+                  <h1 className="anl-company">{analysis.company}</h1>
+                  <span className="num anl-ticker-badge">{analysis.ticker}</span>
+                  {annualOnly && <span className="num anl-ticker-badge" title="Données via Yahoo">via Yahoo</span>}
+                </div>
+                {analysis.price != null && (
+                  <div className="num anl-price">{currency} {analysis.price.toFixed(2)}</div>
+                )}
+              </div>
+              <button className={'btn ' + (watched ? 'btn-soft' : 'btn-brand')} onClick={onWatch}>
+                {watched ? <><Icon name="check" size={16} /> Dans la watchlist</> : <><Icon name="plus" size={16} /> Ajouter à la watchlist</>}
+              </button>
+            </div>
+            {analysis.verdict_direct?.trim() && <p className="anl-verdict">{analysis.verdict_direct}</p>}
+            <div className="col gap-6 anl-composition">
+              <div className="row between">
+                <span className="tiny muted">Composition de la note</span>
+                <span className="num tiny anl-comp-counts">
+                  <span style={{ color: 'var(--good)' }}>{counts.good} oui</span> · <span style={{ color: 'var(--warn)' }}>{counts.warn} partiel</span> · <span style={{ color: 'var(--bad)' }}>{counts.bad} non</span>
+                </span>
+              </div>
+              <CompositionBar counts={counts} />
+            </div>
+          </div>
+        </div>
+
+        {/* Cours */}
+        <PriceSection ticker={analysis.ticker} currency={currency} />
+
+        {/* 10 critères */}
+        <Section title="Les chiffres" sub="10 critères financiers objectifs · la donnée tranche, pas les opinions">
+          <CriteriaGrid items={chiffres} ticker={analysis.ticker} currency={currency} annualOnly={annualOnly} />
+        </Section>
+
+        {/* Résultats */}
+        {(analysis.earnings?.next || analysis.earnings?.last) && (
+          <Section title="Résultats" sub="Dernier rapport publié et prochaine échéance">
+            <EarningsPanel ticker={analysis.ticker} earnings={analysis.earnings} currency={currency} />
+          </Section>
+        )}
+
+        {/* Qualitatif (à la demande) */}
+        <Section
+          title="Analyse qualitative"
+          sub="Business model et management · optionnelle, à la demande"
+          right={analysis.qualitativeAvailable
+            ? <button className="btn btn-ghost btn-sm" onClick={onRefreshMgmt} disabled={refreshingQual}>
+                {refreshingQual ? <><span className="spinner" /> Maj…</> : <><Icon name="refresh" size={14} /> Management</>}
+              </button>
+            : undefined}
+        >
+          {analysis.qualitativeAvailable ? (
+            <div className="col gap-20">
+              <div className="col gap-10">
+                <span className="kicker anl-qual-kicker">Business model · {scoreOf(business)}</span>
+                <CriteriaGrid items={business} />
+              </div>
+              <div className="col gap-10">
+                <span className="kicker anl-qual-kicker">Management · {scoreOf(management)}</span>
+                <CriteriaGrid items={management} />
+              </div>
+            </div>
+          ) : (
+            <div className="card anl-qual-cta">
+              <div className="anl-qual-cta-icon"><Icon name="layers" size={22} /></div>
+              <p>L'analyse qualitative évalue le moat, la prévisibilité des revenus et la qualité du management — au-delà des seuls chiffres.</p>
+              <button className="btn btn-soft" onClick={onGenerateQual} disabled={generatingQual}>
+                {generatingQual ? <><span className="spinner" /> Génération…</> : 'Lancer l\'analyse qualitative'}
+              </button>
+            </div>
+          )}
+        </Section>
+
+        {/* Valorisation */}
+        <Section title="Valorisation" sub="Prix d'entrée — jugé séparément de la qualité du business">
+          {valuationCards.length === 2 && (
+            <CriteriaGrid items={valuationCards} ticker={analysis.ticker} currency={currency} annualOnly={annualOnly} />
+          )}
+          <ValuationPanel analysis={analysis} onValuationChanged={onValuationChanged} />
+        </Section>
+
+        {/* Actualités */}
+        {analysis.news.length > 0 && (
+          <Section title="Actualités récentes" sub="Le contexte, sans le bruit">
+            <NewsPanel ticker={analysis.ticker} news={analysis.news} />
+          </Section>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ─── Mini-barre sticky ───────────────────────────────────────────────────────
+function StickyScoreBar({ analysis, score, tone, visible, watched, onWatch }: {
+  analysis: AnalyzeResponse; score: number; tone: { bg: string; ink: string }; visible: boolean; watched: boolean; onWatch: () => void;
+}) {
+  return (
+    <div className="anl-sticky" data-visible={visible}>
+      <div className="wrap anl-sticky-inner">
+        <div className="row gap-12" style={{ minWidth: 0 }}>
+          <span className="num anl-sticky-ticker">{analysis.ticker}</span>
+          <span className="tiny muted only-desktop anl-sticky-name">{analysis.company}</span>
+          {analysis.price != null && <span className="num tiny" style={{ fontWeight: 600 }}>{analysis.currency} {analysis.price.toFixed(2)}</span>}
+        </div>
+        <div className="row gap-12">
+          <span className="num anl-sticky-score" style={{ color: tone.ink, background: tone.bg }}>{score}/10</span>
+          <button className={'btn btn-sm ' + (watched ? 'btn-soft' : 'btn-brand')} onClick={onWatch}>
+            {watched ? <><Icon name="check" size={14} /> Suivie</> : <><Icon name="plus" size={14} /> Watchlist</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Section cours (SVG via priceHistory) ────────────────────────────────────
+function PriceSection({ ticker, currency }: { ticker: string; currency: string }) {
+  const [horizon, setHorizon] = useState('5A');
+  const [data, setData] = useState<number[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const { years, interval } = HORIZONS[horizon]!;
+    api.priceHistory(ticker, years, interval)
+      .then(res => { if (!cancelled) setData(res.points.map(p => p.value)); })
+      .catch(() => { if (!cancelled) setData([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [ticker, horizon]);
+
+  return (
+    <Section title="Cours" sub="Évolution du prix sur l'horizon sélectionné"
+      right={<div className="seg">{Object.keys(HORIZONS).map(h => (
+        <button key={h} type="button" data-active={h === horizon} onClick={() => setHorizon(h)}>{h}</button>
+      ))}</div>}>
+      <div className="card anl-price-card">
+        {loading ? <div className="skel-ui" style={{ height: 240 }} />
+          : data && data.length >= 2 ? <PriceChart data={data} currency={currency === 'USD' ? '$' : ''} />
+          : <div className="anl-price-empty">Graphique de cours indisponible pour ce symbole.</div>}
+      </div>
+    </Section>
+  );
+}
+
+// ─── Skeleton chargement ─────────────────────────────────────────────────────
+function LoadingState() {
+  return (
+    <div className="fade-in col gap-20 anl-filled">
+      <div className="card anl-scorecard">
+        <div className="skel-ui" style={{ width: 116, height: 116, borderRadius: '50%' }} />
+        <div className="col gap-10 grow">
+          <div className="skel-ui" style={{ width: 220, height: 26 }} />
+          <div className="skel-ui" style={{ width: 320, height: 16 }} />
+          <div className="skel-ui" style={{ width: '70%', height: 14 }} />
+          <div className="skel-ui" style={{ width: 170, height: 40, marginTop: 8, borderRadius: 9 }} />
+        </div>
+      </div>
+      <div className="card skel-ui" style={{ height: 240 }} />
+      <div className="criteria-grid">
+        {Array.from({ length: 6 }).map((_, i) => <div key={i} className="card skel-ui" style={{ height: 128 }} />)}
+      </div>
+    </div>
+  );
+}
+
+// ─── Erreur ──────────────────────────────────────────────────────────────────
+function ErrorState({ error, ticker, onRetry }: { error: ApiError; ticker: string; onRetry: () => void }) {
+  let title: string, desc: string, icon: 'search' | 'shield' | 'refresh' = 'search';
+  if (error.status === 404) { title = `Ticker « ${ticker} » introuvable`; desc = error.details ?? error.userMessage; icon = 'search'; }
+  else if (error.status === 429) { title = 'Trop de requêtes'; desc = 'Limite temporaire atteinte. Réessaie dans une minute.'; icon = 'refresh'; }
+  else if (error.status === 0) { title = 'Connexion impossible'; desc = 'Impossible de joindre le serveur. Réessaie dans un instant.'; icon = 'refresh'; }
+  else if (error.status === 400) { title = 'Ticker invalide'; desc = 'Lettres majuscules, 8 caractères max.'; icon = 'search'; }
+  else { title = 'Erreur'; desc = error.userMessage; icon = 'shield'; }
+  return (
+    <div className="card anl-error fade-up">
+      <div className="anl-error-icon"><Icon name={icon} size={26} /></div>
+      <h3>{title}</h3>
+      <p className="muted">{desc}</p>
+      <button className="btn btn-ghost" onClick={onRetry} style={{ marginTop: 6 }}>Nouvelle recherche</button>
+    </div>
+  );
+}
+
+// ─── Vitrine (état vide) — les mieux notées ──────────────────────────────────
+function LandingDiscovery({ onPick }: { onPick: (ticker: string) => void }) {
+  const [picks, setPicks] = useState<ScreenerTopRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api.screener.top({ minRatio: 0.9, minMax: 8, limit: 6 })
+      .then(p => { if (!cancelled) { setPicks(p); setLoaded(true); } })
+      .catch(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+  if (loaded && picks.length === 0) return null;
+  return (
+    <div className="fade-up anl-landing">
+      <div className="row gap-8 anl-landing-head">
+        <Icon name="star" size={16} style={{ color: 'var(--brand)' }} />
+        <span className="kicker">Issu de la veille · les mieux notées</span>
+      </div>
+      <div className="anl-landing-grid">
+        {!loaded
+          ? Array.from({ length: 6 }).map((_, i) => <div key={i} className="card skel-ui" style={{ height: 96 }} />)
+          : picks.map(p => {
+              const s = p.scoreChiffresMax ? Math.round((p.scoreChiffres ?? 0) / p.scoreChiffresMax * 10) : 0;
+              return (
+                <button key={p.ticker} className="card anl-landing-card" onClick={() => onPick(p.ticker)}>
+                  <div className="row between">
+                    <div className="col gap-2" style={{ minWidth: 0 }}>
+                      <span className="num anl-landing-ticker">{p.ticker}</span>
+                      <span className="tiny muted anl-landing-name">{p.name ?? p.ticker}</span>
+                    </div>
+                    <ScorePill score={s} />
+                  </div>
+                  {p.pfcfTTM != null && p.pfcfTTM > 0 && (
+                    <div className="row between anl-landing-foot">
+                      <span className="tiny muted">P/FCF</span>
+                      <span className="num tiny" style={{ color: 'var(--ink-2)' }}>{p.pfcfTTM.toFixed(1)}×</span>
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+      </div>
     </div>
   );
 }
