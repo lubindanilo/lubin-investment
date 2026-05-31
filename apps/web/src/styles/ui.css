@@ -1,0 +1,102 @@
+/* ============================================================
+   Utilitaires "Moderne fintech" (handoff). Complète global.css.
+   On NE redéfinit PAS .card / .input / .badge existants pour ne pas casser
+   les composants actuels — les primitives utilisent des classes dédiées.
+   ============================================================ */
+
+/* Layout */
+.row { display: flex; align-items: center; }
+.col { display: flex; flex-direction: column; }
+.between { justify-content: space-between; }
+.center { justify-content: center; }
+.wide { width: 100%; }
+.grow { flex: 1; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.gap-2 { gap: 2px; } .gap-4 { gap: 4px; } .gap-6 { gap: 6px; } .gap-8 { gap: 8px; }
+.gap-10 { gap: 10px; } .gap-12 { gap: 12px; } .gap-14 { gap: 14px; } .gap-16 { gap: 16px; }
+.gap-20 { gap: 20px; } .gap-24 { gap: 24px; } .gap-28 { gap: 28px; } .gap-32 { gap: 32px; }
+
+/* Texte utilitaire */
+.kicker { font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--brand-ink); }
+.divider { height: 1px; background: var(--line); width: 100%; }
+.muted { color: var(--ink-3); }
+.tiny { font-size: 12px; }
+
+/* Boutons (handoff) */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: var(--sans); font-weight: 600; font-size: 14px;
+  border: 1px solid transparent; border-radius: var(--r-sm);
+  padding: 0 16px; height: 40px; white-space: nowrap;
+  transition: background .15s, border-color .15s, box-shadow .15s, transform .06s, color .15s;
+  letter-spacing: -0.01em;
+}
+.btn:active { transform: translateY(0.5px); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-brand { background: var(--brand); color: #fff; box-shadow: var(--sh-brand); }
+.btn-brand:hover:not(:disabled) { background: var(--brand-press); }
+.btn-ghost { background: var(--surface); color: var(--ink); border-color: var(--line); box-shadow: var(--sh-xs); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); border-color: oklch(0.88 0.006 270); }
+.btn-soft { background: var(--brand-soft); color: var(--brand-ink); }
+.btn-soft:hover:not(:disabled) { background: oklch(0.93 0.045 277); }
+.btn-sm { height: 32px; font-size: 13px; padding: 0 12px; border-radius: var(--r-xs); }
+.btn-lg { height: 50px; font-size: 15.5px; padding: 0 24px; border-radius: var(--r-md); }
+.btn-block { width: 100%; }
+
+/* Chips */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 5px 12px;
+  transition: background .14s, border-color .14s, color .14s;
+}
+.chip:hover { border-color: oklch(0.86 0.006 270); }
+.chip[data-active="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
+
+/* Segmented control (sélecteurs de période / filtres) */
+.seg { display: inline-flex; background: var(--bg-soft); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 3px; gap: 2px; }
+.seg button {
+  border: none; background: transparent; color: var(--ink-3);
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  padding: 5px 11px; border-radius: 6px; transition: all .14s;
+}
+.seg button:hover { color: var(--ink); }
+.seg button[data-active="true"] { background: var(--surface); color: var(--brand-ink); box-shadow: var(--sh-xs); }
+
+/* Badge statut (primitive StatusBadge) — classe dédiée pour éviter tout conflit */
+.s-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em;
+  padding: 3px 9px 3px 8px; border-radius: var(--r-pill);
+  text-transform: uppercase; white-space: nowrap;
+}
+.s-badge-good { background: var(--good-bg); color: var(--good-ink); }
+.s-badge-warn { background: var(--warn-bg); color: var(--warn-ink); }
+.s-badge-bad  { background: var(--bad-bg);  color: var(--bad-ink); }
+.s-badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+.s-dot-good { background: var(--good); } .s-dot-warn { background: var(--warn); } .s-dot-bad { background: var(--bad); }
+
+/* Popover info (dark) */
+.pop {
+  position: absolute; z-index: 60; width: 280px;
+  background: var(--ink); color: oklch(0.96 0.005 270);
+  border-radius: var(--r-sm); padding: 13px 14px; box-shadow: var(--sh-lg);
+  font-size: 12.5px; line-height: 1.5;
+}
+.pop b { color: #fff; }
+.pop-arrow { position: absolute; width: 10px; height: 10px; background: var(--ink); transform: rotate(45deg); }
+
+/* Skeleton (handoff shimmer) — classe dédiée .skel-ui */
+@keyframes shimmer-ui { 0% { background-position: -460px 0; } 100% { background-position: 460px 0; } }
+.skel-ui {
+  background: linear-gradient(90deg, var(--bg-soft) 25%, oklch(0.93 0.005 270) 37%, var(--bg-soft) 63%);
+  background-size: 920px 100%; animation: shimmer-ui 1.4s linear infinite; border-radius: 8px;
+}
+@media (prefers-reduced-motion: reduce) { .skel-ui { animation: none; } }
+
+/* Animations */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.fade-up { animation: fadeUp .42s cubic-bezier(.22,.61,.36,1) both; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.fade-in { animation: fadeIn .3s ease both; }
