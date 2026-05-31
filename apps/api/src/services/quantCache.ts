@@ -51,6 +51,12 @@ export interface CachedQuantSnapshot {
    *  aucune date n'est connue (recheck espacé), tout en gardant le cache valide
    *  "jusqu'à la date" quand une date future est connue. */
   earningsCheckedAt?: string | null;
+
+  // ─── Métadonnées d'affichage (screener) ─────────────────────────────────
+  /** Secteur/industrie (Finnhub). Null pour la plupart des titres Yahoo. */
+  sector?: string | null;
+  /** Variation du jour en % (quote.dp). */
+  dayChangePct?: number | null;
 }
 
 /** Lit le snapshot caché pour un ticker. Retourne null si absent (jamais analysé). */

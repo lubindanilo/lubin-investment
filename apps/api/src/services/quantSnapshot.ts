@@ -40,6 +40,10 @@ export interface QuantData {
   yahooSymbol?: string;
   rawNews: FinnhubNewsItem[];
   earnings: EarningsInfo;
+  /** Secteur/industrie (Finnhub profile2). Null pour la plupart des titres Yahoo. */
+  industry: string | null;
+  /** Variation du jour en % (Finnhub quote.dp). Null si indisponible. */
+  dayChangePct: number | null;
   /** True si Finnhub n'a renvoyé NI metric NI quote (ticker complètement inconnu).
    *  Le caller (analyze) peut alors throw 503 ; watchlist peut renvoyer emptyEntry. */
   finnhubCompletelyEmpty: boolean;
@@ -230,6 +234,8 @@ export async function loadQuantData(ticker: string, opts: LoadQuantOptions = {})
   return {
     metrics, company, fundamentalsAvailable, fundamentalsSource, currency, yahooSymbol,
     rawNews, earnings: earningsInfo, finnhubCompletelyEmpty,
+    industry: fhProfile?.finnhubIndustry ?? null,
+    dayChangePct: quote?.dp ?? null,
     rawFhFcfAdj, rawFhCapEmp,
   };
 }

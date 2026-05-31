@@ -1,0 +1,28 @@
+.valb {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  padding: 0;
+  overflow: hidden;
+}
+.valb-left { padding: 22px; border-right: 1px solid var(--line); }
+.valb-kicker-row { margin-bottom: 16px; }
+.valb-kicker { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); }
+.valb-slider-val { font-weight: 700; font-size: 14px; color: var(--brand-ink); }
+
+.valb-range { width: 100%; accent-color: var(--brand); height: 6px; }
+
+.valb-right { padding: 22px; background: var(--surface-2); display: flex; flex-direction: column; justify-content: center; }
+.valb-price { font-size: 40px; font-weight: 700; color: var(--ink); line-height: 1; letter-spacing: -0.02em; }
+.valb-current { margin-top: 10px; }
+.valb-badge {
+  align-self: flex-start; margin-top: 12px;
+  font-size: 12.5px; font-weight: 700; padding: 6px 12px; border-radius: var(--r-pill);
+}
+.valb-badge-good { background: var(--good-bg); color: var(--good-ink); }
+.valb-badge-bad { background: var(--bad-bg); color: var(--bad-ink); }
+.valb-note { margin-top: 14px; line-height: 1.5; }
+
+@media (max-width: 880px) {
+  .valb { grid-template-columns: 1fr; }
+  .valb-left { border-right: none; border-bottom: 1px solid var(--line); }
+}

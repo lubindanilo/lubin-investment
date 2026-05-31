@@ -3,19 +3,21 @@ import { useNavigate } from 'react-router-dom';
 import type { ScreenerTopRow, ScreenerStats } from '@lubin/shared';
 import { api, ApiError } from '../lib/api.js';
 import { Icon, ScorePill } from '../components/ui/primitives.js';
+import { Sparkline } from '../components/ui/charts.js';
 import './ScreenerPage.css';
 
 const SCORE_OPTS = [4, 6, 8, 9, 10];
-const PFCF_MAX = 50; // valeur haute = "pas de filtre P/FCF"
+const PFCF_MAX = 50; // valeur haute = pas de filtre P/FCF
 
-type SortCol = 'score' | 'pfcf';
+type SortCol = 'score' | 'pfcf' | 'price' | 'change';
 interface SortState { col: SortCol; dir: 'asc' | 'desc' }
 
 function ratioOf(r: ScreenerTopRow) { return r.scoreChiffresMax ? (r.scoreChiffres ?? 0) / r.scoreChiffresMax : 0; }
-function formatEarnings(iso?: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso + 'T12:00:00Z');
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+function valOf(r: ScreenerTopRow, col: SortCol): number {
+  if (col === 'score') return ratioOf(r);
+  if (col === 'pfcf') return r.pfcfTTM ?? Infinity;
+  if (col === 'price') return r.price ?? -Infinity;
+  return r.dayChangePct ?? -Infinity;
 }
 
 export function ScreenerPage() {
@@ -45,11 +47,7 @@ export function ScreenerPage() {
 
   const sorted = useMemo(() => {
     const dir = sort.dir === 'desc' ? -1 : 1;
-    return [...rows].sort((a, b) => {
-      const av = sort.col === 'score' ? ratioOf(a) : (a.pfcfTTM ?? Infinity);
-      const bv = sort.col === 'score' ? ratioOf(b) : (b.pfcfTTM ?? Infinity);
-      return (av - bv) * dir;
-    });
+    return [...rows].sort((a, b) => (valOf(a, sort.col) - valOf(b, sort.col)) * dir);
   }, [rows, sort]);
 
   const progress = stats && stats.total > 0 ? Math.round(((stats.scored + stats.nodata + stats.error) / stats.total) * 100) : 0;
@@ -57,10 +55,8 @@ export function ScreenerPage() {
   const SortTh = ({ label, col }: { label: string; col: SortCol }) => {
     const active = sort.col === col;
     return (
-      <th className="sortable num-cell" onClick={() => setSort({ col, dir: active && sort.dir === 'desc' ? 'asc' : 'desc' })}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-          {label}<span style={{ opacity: active ? 1 : 0.25 }}><Icon name={active && sort.dir === 'asc' ? 'arrowUp' : 'arrowDown'} size={11} stroke={2.4} /></span>
-        </span>
+      <th className="sortable" onClick={() => setSort({ col, dir: active && sort.dir === 'desc' ? 'asc' : 'desc' })}>
+        <span className="scr-th-inner">{label}<span style={{ opacity: active ? 1 : 0.25 }}><Icon name={active && sort.dir === 'asc' ? 'arrowUp' : 'arrowDown'} size={11} stroke={2.4} /></span></span>
       </th>
     );
   };
@@ -80,7 +76,7 @@ export function ScreenerPage() {
                 <span className="num tiny" style={{ fontWeight: 700, color: progress >= 100 ? 'var(--good)' : 'var(--brand-ink)' }}>{progress >= 100 ? 'À jour' : progress + ' %'}</span>
               </div>
               <div className="scr-progress-track"><div className="scr-progress-fill" style={{ width: `${progress}%`, background: progress >= 100 ? 'var(--good)' : 'var(--brand)' }} /></div>
-              <span className="tiny muted num">{stats.scored.toLocaleString('fr-FR')} / {stats.total.toLocaleString('fr-FR')} titres notés</span>
+              <span className="tiny muted num">{stats.scored.toLocaleString('fr-FR')} / {stats.total.toLocaleString('fr-FR')} titres réévalués</span>
             </div>
           )}
         </div>
@@ -90,7 +86,7 @@ export function ScreenerPage() {
           <div className="row gap-8"><Icon name="filter" size={15} style={{ color: 'var(--ink-3)' }} /><span className="tiny scr-filter-kicker">Filtres</span></div>
           <div className="row gap-12">
             <span className="label">Note minimale</span>
-            <div className="seg">{SCORE_OPTS.map(s => <button key={s} type="button" data-active={minScore === s} onClick={() => setMinScore(s)}>{s}{s < 10 ? '+' : ''}</button>)}</div>
+            <div className="seg">{SCORE_OPTS.map(s => <button key={s} type="button" data-active={minScore === s} onClick={() => setMinScore(s)}>{s}+</button>)}</div>
           </div>
           <div className="row gap-12 scr-pfcf-filter">
             <span className="label" style={{ whiteSpace: 'nowrap' }}>P/FCF max</span>
@@ -111,29 +107,37 @@ export function ScreenerPage() {
           </div>
         ) : (
           <div className="card scroll-x" style={{ padding: 0, overflow: 'hidden' }}>
-            <table className="tbl">
+            <table className="tbl scr-tbl">
               <thead>
                 <tr>
                   <th>Société</th>
+                  <th>Secteur</th>
                   <SortTh label="Note" col="score" />
                   <SortTh label="P/FCF" col="pfcf" />
-                  <th style={{ textAlign: 'right' }}>Prochains résultats</th>
+                  <SortTh label="Cours" col="price" />
+                  <SortTh label="Var." col="change" />
+                  <th>1 an</th>
                   <th style={{ width: 40 }}></th>
                 </tr>
               </thead>
               <tbody>
                 {sorted.map(r => (
                   <tr key={r.ticker} onClick={() => navigate(`/analyse/${r.ticker}`)}>
-                    <td style={{ maxWidth: 360 }}>
-                      <div className="tbl-soc">
-                        <span className="num tbl-soc-ticker">{r.ticker}</span>
-                        <span className="tbl-soc-name">{r.name ?? r.ticker}</span>
+                    <td>
+                      <div className="scr-soc">
+                        <span className="num scr-soc-ticker">{r.ticker}</span>
+                        <span className="scr-soc-name">{r.name ?? r.ticker}</span>
                       </div>
                     </td>
-                    <td className="num-cell"><ScorePill score={Math.round(ratioOf(r) * 10)} /></td>
-                    <td className="num-cell num" style={{ fontWeight: 600 }}>{r.pfcfTTM != null && r.pfcfTTM > 0 ? r.pfcfTTM.toFixed(1) + '×' : '—'}</td>
-                    <td className="num-cell num" style={{ color: 'var(--ink-2)' }}>{formatEarnings(r.nextEarningsDate)}</td>
-                    <td className="num-cell" style={{ width: 40 }}><span style={{ color: 'var(--ink-4)' }}><Icon name="chevronR" size={16} /></span></td>
+                    <td className="muted" style={{ fontSize: 13 }}>{r.sector ?? '—'}</td>
+                    <td><ScorePill score={Math.round(ratioOf(r) * 10)} /></td>
+                    <td className="num" style={{ fontWeight: 600 }}>{r.pfcfTTM != null && r.pfcfTTM > 0 ? r.pfcfTTM.toFixed(1) + '×' : '—'}</td>
+                    <td className="num">{r.price != null ? r.price.toFixed(2) : '—'}</td>
+                    <td className="num" style={{ fontWeight: 600, color: r.dayChangePct == null ? 'var(--ink-4)' : r.dayChangePct >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                      {r.dayChangePct == null ? '—' : `${r.dayChangePct >= 0 ? '+' : ''}${r.dayChangePct.toFixed(2)} %`}
+                    </td>
+                    <td>{r.spark && r.spark.length >= 2 ? <span style={{ display: 'inline-flex' }}><Sparkline data={r.spark} /></span> : <span className="muted">—</span>}</td>
+                    <td style={{ width: 40, textAlign: 'right' }}><span style={{ color: 'var(--ink-4)' }}><Icon name="chevronR" size={16} /></span></td>
                   </tr>
                 ))}
               </tbody>

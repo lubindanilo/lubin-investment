@@ -58,6 +58,8 @@ export async function buildAndCacheQuantSnapshot(
     sharesOutstanding,
     nextEarningsDate: quant.earnings?.next?.date ?? null,
     earningsCheckedAt: new Date().toISOString(),
+    sector: quant.industry,
+    dayChangePct: quant.dayChangePct,
   };
   await writeCachedSnapshot(ticker, snapshot);
   return snapshot;

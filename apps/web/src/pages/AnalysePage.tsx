@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { AnalyzeResponse, ValoParams, ValuationResult, ScreenerTopRow, Criterion } from '@lubin/shared';
+import type { AnalyzeResponse, ScreenerTopRow, Criterion } from '@lubin/shared';
 import { api, ApiError } from '../lib/api.js';
 import { useToast } from '../components/Toast.js';
 import { useAuth } from '../contexts/AuthContext.js';
 import { CriteriaGrid } from '../components/CriterionCard.js';
-import { ValuationPanel } from '../components/ValuationPanel.js';
-import { NewsPanel } from '../components/NewsPanel.js';
+import { ValuationBlock } from '../components/ui/ValuationBlock.js';
 import { EarningsPanel } from '../components/EarningsPanel.js';
 import { Icon, ScoreCircle, ScorePill, scoreColor, toDataStatus } from '../components/ui/primitives.js';
 import { CompositionBar, PriceChart } from '../components/ui/charts.js';
@@ -100,16 +99,9 @@ export function AnalysePage() {
     finally { setRefreshingQual(false); }
   }
 
-  function onValuationChanged(valuation: ValuationResult, params: ValoParams) {
-    if (!analysis) return;
-    const criteres = [...analysis.criteres.slice(0, -1), valuation];
-    setAnalysis({ ...analysis, criteres, valuation, valoParams: params });
-  }
-
   const chiffres = analysis?.criteres.slice(0, 10) ?? [];
   const business = analysis?.qualitativeAvailable ? analysis.criteres.slice(10, 20) : [];
   const management = analysis?.qualitativeAvailable ? analysis.criteres.slice(20, 25) : [];
-  const valuationCards = analysis?.criteres.slice(-2) ?? [];
   const watched = !!analysis && (analysis.inWatchlist === true || inWatchlist.has(analysis.ticker));
 
   return (
@@ -132,14 +124,12 @@ export function AnalysePage() {
             chiffres={chiffres}
             business={business}
             management={management}
-            valuationCards={valuationCards}
             watched={watched}
             onWatch={addToWatchlist}
             onGenerateQual={generateQualitative}
             generatingQual={generatingQual}
             refreshingQual={refreshingQual}
             onRefreshMgmt={refreshManagementOnly}
-            onValuationChanged={onValuationChanged}
           />
         )}
       </div>
@@ -184,12 +174,11 @@ function Section({ title, sub, right, children }: {
 }
 
 // ─── Vue remplie ─────────────────────────────────────────────────────────────
-function AnalysisView({ analysis, chiffres, business, management, valuationCards, watched, onWatch, onGenerateQual, generatingQual, refreshingQual, onRefreshMgmt, onValuationChanged }: {
+function AnalysisView({ analysis, chiffres, business, management, watched, onWatch, onGenerateQual, generatingQual, refreshingQual, onRefreshMgmt }: {
   analysis: AnalyzeResponse;
-  chiffres: Criterion[]; business: Criterion[]; management: Criterion[]; valuationCards: Criterion[];
+  chiffres: Criterion[]; business: Criterion[]; management: Criterion[];
   watched: boolean; onWatch: () => void; onGenerateQual: () => void; generatingQual: boolean;
   refreshingQual: boolean; onRefreshMgmt: () => void;
-  onValuationChanged: (v: ValuationResult, p: ValoParams) => void;
 }) {
   const scoreRef = useRef<HTMLDivElement>(null);
   const [stickyVisible, setStickyVisible] = useState(false);
@@ -297,16 +286,21 @@ function AnalysisView({ analysis, chiffres, business, management, valuationCards
 
         {/* Valorisation */}
         <Section title="Valorisation" sub="Prix d'entrée — jugé séparément de la qualité du business">
-          {valuationCards.length === 2 && (
-            <CriteriaGrid items={valuationCards} ticker={analysis.ticker} currency={currency} annualOnly={annualOnly} />
-          )}
-          <ValuationPanel analysis={analysis} onValuationChanged={onValuationChanged} />
+          <ValuationBlock price={analysis.price} pfcfTTM={analysis.metrics.pfcfTTM} currency={currency} valoParams={analysis.valoParams} />
         </Section>
 
         {/* Actualités */}
         {analysis.news.length > 0 && (
           <Section title="Actualités récentes" sub="Le contexte, sans le bruit">
-            <NewsPanel ticker={analysis.ticker} news={analysis.news} />
+            <div className="card anl-news">
+              {analysis.news.map((n, i) => (
+                <a key={i} href={n.url} target="_blank" rel="noopener noreferrer" className="anl-news-row">
+                  <span className="anl-news-src">{n.source}</span>
+                  <span className="anl-news-title">{n.titre}</span>
+                  <span className="num anl-news-time">{n.date}</span>
+                </a>
+              ))}
+            </div>
           </Section>
         )}
       </div>

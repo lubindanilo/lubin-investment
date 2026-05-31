@@ -200,6 +200,14 @@ export interface ScreenerTopRow {
   pfcfTTM: number | null;
   currency: string | null;
   nextEarningsDate: string | null;
+  /** Secteur/industrie (Finnhub). Null pour beaucoup de titres Yahoo. */
+  sector: string | null;
+  /** Dernier cours connu (au scoring). */
+  price: number | null;
+  /** Variation du jour en %. */
+  dayChangePct: number | null;
+  /** Closes mensuels ~1 an pour la sparkline. */
+  spark: number[] | null;
 }
 
 /** Progression de la veille screener. */

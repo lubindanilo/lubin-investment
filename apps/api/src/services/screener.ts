@@ -15,6 +15,7 @@
 import { prisma } from '../db/client.js';
 import { getStockSymbols } from './finnhub.js';
 import { buildAndCacheQuantSnapshot } from './scoreSnapshot.js';
+import { getSparkSeries } from './priceSeries.js';
 import { EU_LARGE_CAPS } from '../data/euLargeCaps.js';
 
 /**
@@ -124,6 +125,8 @@ async function scoreOne(ticker: string): Promise<ScoreOutcome> {
     const snap = await buildAndCacheQuantSnapshot(ticker, { includeEarnings: true });
     const hasScore = snap.scoreChiffresMax > 0;
     const status: ScoreOutcome = snap.fundamentalsAvailable && hasScore ? 'scored' : 'nodata';
+    // Sparkline 1 an pour les titres notés (non bloquant si Yahoo échoue → []).
+    const spark = hasScore ? await getSparkSeries(ticker).catch(() => []) : [];
     await prisma.screenerTicker.update({
       where: { ticker },
       data: {
@@ -135,6 +138,10 @@ async function scoreOne(ticker: string): Promise<ScoreOutcome> {
         scoreChiffresMax: hasScore ? snap.scoreChiffresMax : null,
         scoreRatio: hasScore ? snap.scoreChiffres / snap.scoreChiffresMax : null,
         pfcfTTM: snap.metrics.pfcfTTM ?? null,
+        sector: snap.sector ?? null,
+        price: snap.metrics.price ?? null,
+        dayChangePct: snap.dayChangePct ?? null,
+        spark: spark.length >= 2 ? spark : undefined,
         nextEarningsDate: snap.nextEarningsDate ?? null,
         lastScoredAt: new Date(),
         attempts: { increment: 1 },
@@ -179,6 +186,10 @@ export interface TopRow {
   pfcfTTM: number | null;
   currency: string | null;
   nextEarningsDate: string | null;
+  sector: string | null;
+  price: number | null;
+  dayChangePct: number | null;
+  spark: number[] | null;
 }
 
 /** Meilleures notes pour la vue screener. Tri par ratio décroissant, indexé. */
@@ -196,8 +207,9 @@ export async function getTop(opts: { minRatio?: number; maxPfcf?: number; minMax
     select: {
       ticker: true, name: true, scoreChiffres: true, scoreChiffresMax: true,
       pfcfTTM: true, currency: true, nextEarningsDate: true,
+      sector: true, price: true, dayChangePct: true, spark: true,
     },
-  });
+  }) as Promise<TopRow[]>;
 }
 
 /** Compteurs de progression de la veille. */

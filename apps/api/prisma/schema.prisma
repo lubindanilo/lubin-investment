@@ -92,6 +92,13 @@ model ScreenerTicker {
   /// scoreChiffres / scoreChiffresMax — indexé pour le tri "meilleures notes"
   scoreRatio         Float?
   pfcfTTM            Float?
+  /// Métadonnées d'affichage du screener
+  sector             String?
+  price              Float?
+  /// Variation du jour en %
+  dayChangePct       Float?
+  /// Closes mensuels ~1 an pour la sparkline (number[])
+  spark              Json?
   fundamentalsSource String?
   /// Date du prochain earnings (YYYY-MM-DD) — pilote le re-scoring
   nextEarningsDate   String?

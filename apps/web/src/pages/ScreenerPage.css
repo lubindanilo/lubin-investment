@@ -15,6 +15,13 @@
 .scr-filter-kicker { font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
 .scr-pfcf-filter { flex: 1; min-width: 220px; max-width: 340px; }
 
+/* Cellule Société : ticker gras mono + nom gris tronqué */
+.scr-soc { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.scr-soc-ticker { font-family: var(--mono); font-weight: 700; font-size: 13.5px; color: var(--ink); min-width: 46px; flex-shrink: 0; }
+.scr-soc-name { color: var(--ink-2); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.scr-th-inner { display: inline-flex; align-items: center; gap: 4px; }
+.scr-tbl td:first-child { max-width: 360px; }
+
 .scr-msg { padding: 14px 18px; color: var(--bad-ink); background: var(--bad-bg); border-color: oklch(0.595 0.205 26 / 0.2); margin-bottom: 16px; font-size: 13px; }
 .scr-empty { padding: 56px 24px; text-align: center; }
 .scr-empty h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
