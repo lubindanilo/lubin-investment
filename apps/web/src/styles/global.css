@@ -1,38 +1,90 @@
 :root {
-  /* Marque / interactif (bleu) — distinct des couleurs sémantiques. Sert pour le logo,
-     les boutons, onglets actifs, focus, liens, et les courbes/barres des graphiques. */
-  --brand: #2f54eb;
-  --brand-dark: #1d39c4;
-  --brand-dim: rgba(47, 84, 235, 0.07);
-  --brand-border: rgba(47, 84, 235, 0.22);
-  --bg: #ffffff;
-  --bg2: #fafafa;
-  --bg3: #f5f5f7;
-  --border: #e5e5ea;
-  --border-strong: #d2d2d7;
-  --text: #1d1d1f;
-  --text2: #6e6e73;
-  --text3: #a1a1a6;
-  /* Sémantique données : vert = bon, rouge = négatif/danger, orange = partiel. */
-  --green: #137333;
-  --green-dim: rgba(19, 115, 51, 0.08);
-  --red: #cf1e2c;
-  --red-dim: rgba(207, 30, 44, 0.08);
-  --red-border: rgba(207, 30, 44, 0.25);
-  --orange: #b45309;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
+  /* ════════════════════════════════════════════════════════════════════
+     Design tokens — direction "Moderne fintech" (oklch, indigo/violet).
+     Source de vérité : design_handoff_lubin_investment/design/styles.css.
+     ════════════════════════════════════════════════════════════════════ */
+
+  /* — Surfaces — */
+  --bg:        oklch(0.985 0.004 270);
+  --bg-soft:   oklch(0.965 0.005 270);
+  --surface:   oklch(1 0 0);
+  --surface-2: oklch(0.984 0.004 270);
+  --line:      oklch(0.922 0.006 270);
+  --line-soft: oklch(0.952 0.005 270);
+
+  /* — Texte — */
+  --ink:    oklch(0.245 0.013 274);
+  --ink-2:  oklch(0.475 0.012 273);
+  --ink-3:  oklch(0.62 0.011 273);
+  --ink-4:  oklch(0.74 0.009 273);
+
+  /* — Marque (indigo/violet) — distincte des couleurs sémantiques — */
+  --brand:        oklch(0.515 0.193 277);
+  --brand-press:  oklch(0.455 0.188 277);
+  --brand-soft:   oklch(0.95 0.035 277);
+  --brand-softer: oklch(0.972 0.02 277);
+  --brand-ink:    oklch(0.42 0.18 277);
+  --brand-ring:   oklch(0.515 0.193 277 / 0.35);
+
+  /* — Sémantique DATA (réservé : vert/orange/rouge) — */
+  --good: oklch(0.595 0.135 156);  --good-bg: oklch(0.955 0.04 156);  --good-ink: oklch(0.46 0.11 156);
+  --warn: oklch(0.73 0.14 71);     --warn-bg: oklch(0.965 0.05 78);   --warn-ink: oklch(0.55 0.12 64);
+  --bad:  oklch(0.595 0.205 26);   --bad-bg:  oklch(0.962 0.035 26);  --bad-ink:  oklch(0.52 0.19 27);
+  --neutral-bg: oklch(0.95 0.004 270);
+
+  /* — Radii — */
+  --r-xs: 6px; --r-sm: 9px; --r-md: 13px; --r-lg: 18px; --r-xl: 24px; --r-pill: 999px;
+
+  /* — Ombres — */
+  --sh-xs: 0 1px 2px oklch(0.3 0.02 274 / 0.05);
+  --sh-sm: 0 1px 2px oklch(0.3 0.02 274 / 0.05), 0 2px 6px oklch(0.3 0.02 274 / 0.05);
+  --sh-md: 0 2px 4px oklch(0.3 0.02 274 / 0.04), 0 8px 22px oklch(0.3 0.02 274 / 0.08);
+  --sh-lg: 0 8px 18px oklch(0.3 0.02 274 / 0.07), 0 28px 60px oklch(0.3 0.02 274 / 0.13);
+  --sh-brand: 0 1px 2px oklch(0.45 0.19 277 / 0.25), 0 6px 18px oklch(0.45 0.19 277 / 0.28);
+
+  /* — Type — */
+  --sans: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --nav-h: 60px;
+
+  /* ── Couche de compatibilité : anciens noms de tokens → nouveau système.
+     Permet aux composants existants d'adopter la nouvelle palette sans réécriture. ── */
+  --brand-dark: var(--brand-press);
+  --brand-dim: var(--brand-soft);
+  --brand-border: oklch(0.515 0.193 277 / 0.22);
+  --bg2: var(--bg-soft);
+  --bg3: var(--surface-2);
+  --border: var(--line);
+  --border-strong: oklch(0.88 0.006 270);
+  --text: var(--ink);
+  --text2: var(--ink-2);
+  --text3: var(--ink-3);
+  --green: var(--good); --green-dim: var(--good-bg);
+  --red: var(--bad); --red-dim: var(--bad-bg); --red-border: oklch(0.595 0.205 26 / 0.25);
+  --orange: var(--warn);
+  --shadow-sm: var(--sh-sm); --shadow-md: var(--sh-md);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: var(--sans);
   background: var(--bg);
-  color: var(--text);
+  color: var(--ink);
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  letter-spacing: -0.01em;
+}
+
+/* Chiffres : mono tabulaire (classe utilitaire partagée) */
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.02em;
 }
 
 a { color: inherit; text-decoration: none; }
@@ -75,7 +127,7 @@ input { font-family: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 13px;
   color: #fff;
   font-weight: 600;
@@ -90,7 +142,7 @@ input { font-family: inherit; }
 .logo-sub {
   font-size: 11px;
   color: var(--text3);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
 }
 
 /* ─── User menu (header haut droite) ─── */
@@ -119,7 +171,7 @@ input { font-family: inherit; }
 }
 
 .user-menu-email {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 12px;
   color: var(--text2);
   max-width: 220px;

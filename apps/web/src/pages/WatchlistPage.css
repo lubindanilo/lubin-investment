@@ -18,7 +18,7 @@
   color: var(--text2);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   padding: 12px 16px;
   text-align: left;
   border-bottom: 1px solid var(--border);
@@ -75,7 +75,7 @@
 .wl-table tbody tr:hover { background: var(--bg3); }
 
 .wl-ticker {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-weight: 600;
   color: var(--brand);
   font-size: 13px;
@@ -83,19 +83,19 @@
 }
 
 .wl-name { color: var(--text); }
-.wl-price { font-family: 'IBM Plex Mono', monospace; color: var(--text); }
+.wl-price { font-family: var(--mono); color: var(--text); }
 
-.wl-pfcf { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+.wl-pfcf { font-family: var(--mono); font-weight: 500; }
 .wl-pfcf.pass { color: var(--green); }
 .wl-pfcf.warn { color: var(--orange); }
 .wl-pfcf.fail { color: var(--red); }
 
-.wl-score { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+.wl-score { font-family: var(--mono); font-weight: 600; }
 .wl-score.high { color: var(--green); }
 .wl-score.mid { color: var(--orange); }
 .wl-score.low { color: var(--red); }
 
-.wl-earnings { font-family: 'IBM Plex Mono', monospace; color: var(--text2); white-space: nowrap; }
+.wl-earnings { font-family: var(--mono); color: var(--text2); white-space: nowrap; }
 
 .wl-remove {
   background: none;

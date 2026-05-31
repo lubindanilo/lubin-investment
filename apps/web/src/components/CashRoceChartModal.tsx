@@ -132,7 +132,7 @@ export function CashRoceChartModal({ ticker, annualOnly = false, onClose }: Prop
                   />
                   <Tooltip
                     contentStyle={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}
-                    labelStyle={{ color: 'var(--text2)', fontFamily: 'IBM Plex Mono, monospace' }}
+                    labelStyle={{ color: 'var(--text2)', fontFamily: 'var(--mono)' }}
                     formatter={(v) => [(Number(v) * 100).toFixed(2) + '%', 'Cash ROCE']}
                     labelFormatter={d => formatDateFull(String(d))}
                   />

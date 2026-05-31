@@ -21,7 +21,7 @@
 }
 
 .score-chip {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   color: var(--brand);
   font-weight: 600;
   font-size: 12px;

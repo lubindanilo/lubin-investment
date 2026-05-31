@@ -47,11 +47,11 @@
 .scr-table tbody tr:hover { background: var(--surface2, rgba(0, 0, 0, 0.03)); }
 .scr-table td { padding: 10px 12px; }
 
-.scr-ticker { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: var(--brand); }
+.scr-ticker { font-family: var(--mono); font-weight: 600; color: var(--brand); }
 .scr-name { color: var(--text); }
-.scr-pfcf, .scr-earnings { font-family: 'IBM Plex Mono', monospace; color: var(--text2); white-space: nowrap; }
+.scr-pfcf, .scr-earnings { font-family: var(--mono); color: var(--text2); white-space: nowrap; }
 
-.scr-score { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+.scr-score { font-family: var(--mono); font-weight: 600; }
 .scr-score.top { color: var(--green); font-weight: 700; }
 .scr-score.high { color: var(--green); }
 .scr-score.mid { color: var(--orange); }

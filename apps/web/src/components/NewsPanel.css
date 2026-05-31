@@ -9,7 +9,7 @@
 
 .news-title {
   font-size: 11px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   color: var(--text2);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -52,7 +52,7 @@
   border-radius: 4px;
   padding: 3px 8px;
   font-size: 10px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-weight: 600;
   white-space: nowrap;
   flex-shrink: 0;
@@ -78,13 +78,13 @@
 .news-source {
   font-size: 10px;
   color: var(--text3);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   margin-top: 4px;
 }
 
 .news-date {
   font-size: 11px;
   color: var(--text3);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   flex-shrink: 0;
 }

@@ -75,7 +75,7 @@
   font-weight: 700;
   font-size: 14px;
   display: flex; align-items: center; justify-content: center;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
 }
 .home-step-title { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
 .home-step p { font-size: 13.5px; line-height: 1.55; color: var(--text2); }

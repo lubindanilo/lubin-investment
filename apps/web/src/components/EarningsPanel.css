@@ -12,7 +12,7 @@
   justify-content: space-between;
   align-items: baseline;
   font-size: 11px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   color: var(--text2);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -24,7 +24,7 @@
 
 .earnings-transcript-link {
   font-size: 11px;
-  font-family: 'Inter', sans-serif;
+  font-family: var(--sans);
   text-transform: none;
   letter-spacing: 0;
   font-weight: 500;
@@ -55,7 +55,7 @@
   color: var(--text3);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-weight: 600;
   margin-bottom: 6px;
 }
@@ -84,7 +84,7 @@
   color: var(--text3);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
 }
 
 .earnings-field-value {
@@ -100,5 +100,5 @@
   font-size: 11px;
   color: var(--text2);
   margin-top: 2px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
 }

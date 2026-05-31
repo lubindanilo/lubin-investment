@@ -135,7 +135,7 @@ export function PfcfChartModal({ ticker, currentPfcf, annualOnly = false, onClos
                   />
                   <Tooltip
                     contentStyle={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}
-                    labelStyle={{ color: 'var(--text2)', fontFamily: 'IBM Plex Mono, monospace' }}
+                    labelStyle={{ color: 'var(--text2)', fontFamily: 'var(--mono)' }}
                     formatter={(v) => [Number(v).toFixed(2) + '×', 'P/FCF']}
                     labelFormatter={d => formatDateFull(String(d))}
                   />

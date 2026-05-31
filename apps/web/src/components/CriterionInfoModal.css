@@ -49,7 +49,7 @@
 }
 
 .info-tag {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--brand);
   text-transform: uppercase;
@@ -100,7 +100,7 @@
 
 .info-section-title {
   font-size: 13px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-weight: 600;
   color: var(--text);
   text-transform: uppercase;
@@ -119,7 +119,7 @@
 
 .info-table thead th {
   text-align: left;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -140,7 +140,7 @@
 }
 
 .info-range {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-weight: 700;
   white-space: nowrap;
   width: 100px;
@@ -176,7 +176,7 @@
 }
 
 .info-formula code {
-  font-family: 'IBM Plex Mono', 'Menlo', monospace;
+  font-family: var(--mono), 'Menlo', monospace;
   font-size: 12.5px;
   color: var(--text);
   font-weight: 600;
@@ -189,7 +189,7 @@
   font-size: 12px;
   color: var(--text-muted, #555);
   margin-top: 6px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
 }
 
 /* Liste "ce que le ROCE ne te dit pas" */

@@ -41,7 +41,7 @@
   color: var(--text2);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   line-height: 1.4;
 }
 
@@ -53,7 +53,7 @@
   border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   white-space: nowrap;
 }
 .badge.pass { background: var(--green-dim); color: var(--green); }
@@ -69,7 +69,7 @@
 .critere-target {
   font-size: 11px;
   color: var(--text3);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
 }
 .critere-explain {
   font-size: 12px;

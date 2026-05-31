@@ -16,7 +16,7 @@
 }
 
 .valo-title {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   color: var(--brand);
   font-size: 11px;
   letter-spacing: 0.08em;
@@ -25,7 +25,7 @@
 }
 
 .valo-fixed {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 10px;
   color: var(--text3);
 }
@@ -36,7 +36,7 @@
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
   margin-bottom: 12px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 11px;
 }
 .valo-stat-label { color: var(--text3); }
@@ -62,7 +62,7 @@
   color: var(--text2);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   margin-bottom: 6px;
   font-weight: 600;
 }
@@ -74,7 +74,7 @@
   padding: 10px 12px;
   font-size: 13px;
   color: var(--text);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   outline: none;
   transition: all 0.15s;
 }

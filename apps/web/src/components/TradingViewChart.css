@@ -9,7 +9,7 @@
 
 .chart-title {
   font-size: 11px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   color: var(--text2);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -26,7 +26,7 @@
   padding: 4px 10px;
   border-radius: 4px;
   font-size: 11px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   border: 1px solid var(--border);
   background: #fff;
   color: var(--text2);
@@ -42,10 +42,10 @@
 /* PriceChart maison (fallback quand TradingView ne reconnaît pas le symbol) */
 .chart-state { padding: 60px 24px; text-align: center; color: var(--text2); font-size: 13px; }
 .chart-state-error { color: var(--brand-dark); }
-.chart-source-note { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text3); font-weight: 400; margin-left: 6px; }
+.chart-source-note { font-family: var(--mono); font-size: 11px; color: var(--text3); font-weight: 400; margin-left: 6px; }
 .chart-stats-row { display: flex; gap: 24px; padding: 12px 18px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 .chart-stat { display: flex; flex-direction: column; gap: 2px; }
-.chart-stat-label { font-size: 10px; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); font-weight: 600; }
+.chart-stat-label { font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); font-weight: 600; }
 .chart-stat-val { font-size: 13px; color: var(--text); font-weight: 600; }
 .chart-stat-val.green { color: var(--green); }
 .chart-stat-val.red { color: var(--red); }

@@ -22,7 +22,7 @@
 }
 
 .error-boundary-msg {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 12px;
   color: var(--red);
   background: var(--red-dim);

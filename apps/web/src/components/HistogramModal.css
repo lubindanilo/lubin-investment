@@ -34,7 +34,7 @@
 }
 
 .hist-ticker {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 12px;
   font-weight: 600;
   color: var(--brand);
@@ -101,12 +101,12 @@
   color: var(--text3);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   margin-bottom: 2px;
 }
 
 .hist-stat-val {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
@@ -127,7 +127,7 @@
   line-height: 1.5;
 }
 .hist-gap-warning code {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 11px;
   background: rgba(0, 0, 0, 0.04);
   padding: 1px 5px;
@@ -140,7 +140,7 @@
    qui n'ont que 4 ans annuels (limite Yahoo) */
 .period-static {
   font-size: 11px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   color: var(--text2);
   background: var(--bg2);
   padding: 6px 12px;

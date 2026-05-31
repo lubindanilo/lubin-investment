@@ -21,7 +21,7 @@
 }
 
 .error-box-details {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--text3);
   margin-top: 8px;
@@ -80,7 +80,7 @@
   line-height: 1.5;
 }
 .fund-missing-banner code {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 11px;
   background: rgba(0, 0, 0, 0.04);
   padding: 1px 5px;
@@ -103,7 +103,7 @@
   line-height: 1.7;
 }
 .chart-unavailable-msg code {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--mono);
   font-size: 12px;
   background: #fff;
   padding: 2px 6px;
@@ -157,7 +157,7 @@
 .landing-empty { font-size: 13px; color: var(--text2); line-height: 1.6; padding: 8px 0; }
 .landing-ex {
   background: var(--brand-dim); color: var(--brand); border: none;
-  font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
   padding: 2px 7px; border-radius: 4px;
 }
 .landing-ex:hover { background: var(--brand); color: #fff; }
@@ -179,8 +179,8 @@
 }
 .landing-card:hover { border-color: var(--brand-border); box-shadow: var(--shadow-md); transform: translateY(-1px); }
 .landing-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.landing-card-ticker { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: var(--brand); font-size: 14px; }
-.landing-card-score { font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 13px; }
+.landing-card-ticker { font-family: var(--mono); font-weight: 600; color: var(--brand); font-size: 14px; }
+.landing-card-score { font-family: var(--mono); font-weight: 700; font-size: 13px; }
 .landing-card-score.top { color: var(--green); }
 .landing-card-score.high { color: var(--green); }
 .landing-card-score.mid { color: var(--orange); }
@@ -188,4 +188,4 @@
   font-size: 13px; color: var(--text); line-height: 1.35;
   display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.landing-card-pfcf { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text3); margin-top: 6px; }
+.landing-card-pfcf { font-family: var(--mono); font-size: 11px; color: var(--text3); margin-top: 6px; }

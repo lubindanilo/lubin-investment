@@ -186,7 +186,7 @@ export function HistogramModal({ ticker, criterionName, config, currency = 'USD'
                   />
                   <Tooltip
                     contentStyle={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}
-                    labelStyle={{ color: 'var(--text2)', fontFamily: 'IBM Plex Mono, monospace' }}
+                    labelStyle={{ color: 'var(--text2)', fontFamily: 'var(--mono)' }}
                     formatter={(v) => [formatFull(Number(v), config.unit, currency), config.label]}
                     labelFormatter={d => freq === 'quarterly' ? `Trimestre ${formatQuarter(String(d))}` : `Année ${String(d).slice(0, 4)}`}
                   />
