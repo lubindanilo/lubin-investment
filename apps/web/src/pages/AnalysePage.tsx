@@ -208,7 +208,7 @@ function AnalysisView({ analysis, chiffres, business, management, valuationCards
   return (
     <>
       <StickyScoreBar analysis={analysis} score={s10} tone={tone} visible={stickyVisible} watched={watched} onWatch={onWatch} />
-      <div className="col gap-28 fade-up anl-filled">
+      <div className="col gap-28 fade-in anl-filled">
         {!analysis.fundamentalsAvailable && (
           <div className="anl-banner">
             <Icon name="shield" size={16} />

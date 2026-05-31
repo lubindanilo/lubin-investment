@@ -164,10 +164,10 @@ export function WatchlistPage() {
                   const s = w.scoreChiffresMax > 0 ? Math.round(w.scoreChiffres / w.scoreChiffresMax * 10) : null;
                   return (
                     <tr key={w.ticker} onClick={() => navigate(`/analyse/${w.ticker}`)}>
-                      <td>
-                        <div className="row gap-10">
-                          <span className="num" style={{ fontWeight: 700, fontSize: 13.5, minWidth: 52 }}>{w.ticker}</span>
-                          <span style={{ color: 'var(--ink-2)', fontSize: 13.5 }}>{w.name}</span>
+                      <td style={{ maxWidth: 340 }}>
+                        <div className="tbl-soc">
+                          <span className="num tbl-soc-ticker">{w.ticker}</span>
+                          <span className="tbl-soc-name">{w.name}</span>
                         </div>
                       </td>
                       <td className="num-cell num" style={{ fontWeight: 600 }}>{w.price != null ? `${w.currency ?? 'USD'} ${w.price.toFixed(2)}` : '—'}</td>

@@ -124,10 +124,10 @@ export function ScreenerPage() {
               <tbody>
                 {sorted.map(r => (
                   <tr key={r.ticker} onClick={() => navigate(`/analyse/${r.ticker}`)}>
-                    <td>
-                      <div className="row gap-10">
-                        <span className="num" style={{ fontWeight: 700, fontSize: 13.5, minWidth: 52 }}>{r.ticker}</span>
-                        <span style={{ color: 'var(--ink-2)', fontSize: 13.5 }}>{r.name ?? r.ticker}</span>
+                    <td style={{ maxWidth: 360 }}>
+                      <div className="tbl-soc">
+                        <span className="num tbl-soc-ticker">{r.ticker}</span>
+                        <span className="tbl-soc-name">{r.name ?? r.ticker}</span>
                       </div>
                     </td>
                     <td className="num-cell"><ScorePill score={Math.round(ratioOf(r) * 10)} /></td>

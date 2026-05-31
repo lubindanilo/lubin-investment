@@ -64,6 +64,15 @@
 .seg button:hover { color: var(--ink); }
 .seg button[data-active="true"] { background: var(--surface); color: var(--brand-ink); box-shadow: var(--sh-xs); }
 
+/* Cellule "Société" des tables : ticker (lane fixe) + nom tronqué */
+.tbl-soc { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.tbl-soc-ticker {
+  font-family: var(--mono); font-weight: 700; font-size: 12.5px; letter-spacing: 0.02em;
+  color: var(--ink); background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: 6px; padding: 2px 7px; flex-shrink: 0; min-width: 56px; text-align: center;
+}
+.tbl-soc-name { color: var(--ink-2); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Badge statut (primitive StatusBadge) — classe dédiée pour éviter tout conflit */
 .s-badge {
   display: inline-flex; align-items: center; gap: 5px;

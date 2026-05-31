@@ -11,8 +11,9 @@ import { Logo } from './components/ui/primitives.js';
 
 export function App() {
   const { pathname } = useLocation();
-  // Pas d'onglets d'app sur la landing commerciale (et les pages d'auth) : page vitrine.
-  const showNav = pathname !== '/' && pathname !== '/login' && pathname !== '/signup';
+  // Onglets d'app masqués uniquement sur les pages d'auth. Présents sur l'accueil pour
+  // garder Watchlist / Screener / Analyser accessibles depuis la landing.
+  const showNav = pathname !== '/login' && pathname !== '/signup';
 
   return (
     <>
