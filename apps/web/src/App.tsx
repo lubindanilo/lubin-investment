@@ -1,4 +1,5 @@
-import { NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { HomePage } from './pages/HomePage.js';
 import { AnalysePage } from './pages/AnalysePage.js';
 import { WatchlistPage } from './pages/WatchlistPage.js';
 import { ScreenerPage } from './pages/ScreenerPage.js';
@@ -8,34 +9,41 @@ import { useAuth } from './contexts/AuthContext.js';
 import { useToast } from './components/Toast.js';
 
 export function App() {
+  const { pathname } = useLocation();
+  // Pas d'onglets d'app sur la landing commerciale (et les pages d'auth) : page vitrine.
+  const showNav = pathname !== '/' && pathname !== '/login' && pathname !== '/signup';
+
   return (
     <>
       <header className="app-header">
-        <div className="logo">
+        <Link to="/" className="logo">
           <div className="logo-mark">LI</div>
           <div>
             <div className="logo-text">Lubin Investment</div>
             <div className="logo-sub">Analyse fondamentale</div>
           </div>
-        </div>
+        </Link>
         <UserMenu />
       </header>
 
-      <nav className="app-nav">
-        <NavLink to="/" end className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>
-          Analyser
-        </NavLink>
-        <NavLink to="/watchlist" className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>
-          Watchlist
-        </NavLink>
-        <NavLink to="/screener" className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>
-          Screener
-        </NavLink>
-      </nav>
+      {showNav && (
+        <nav className="app-nav">
+          <NavLink to="/analyser" className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>
+            Analyser
+          </NavLink>
+          <NavLink to="/watchlist" className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>
+            Watchlist
+          </NavLink>
+          <NavLink to="/screener" className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>
+            Screener
+          </NavLink>
+        </nav>
+      )}
 
       <main className="app-main">
         <Routes>
-          <Route path="/" element={<AnalysePage />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/analyser" element={<AnalysePage />} />
           <Route path="/analyse/:ticker" element={<AnalysePage />} />
           <Route path="/watchlist" element={<RequireAuth><WatchlistPage /></RequireAuth>} />
           <Route path="/screener" element={<ScreenerPage />} />
