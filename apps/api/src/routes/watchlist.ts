@@ -25,6 +25,8 @@ import type { WatchlistEntry } from '@lubin/shared';
 import { prisma } from '../db/client.js';
 import { getQuote } from '../services/finnhub.js';
 import { getNextEarningsDate } from '../services/earnings.js';
+import { getEarningsInfoYahoo } from '../services/yahoo.js';
+import { resolveYahooTicker } from '../services/yahooResolve.js';
 import { loadQuantData } from '../services/quantSnapshot.js';
 import { buildQuantitativeCriteria } from '../services/derivedMetrics.js';
 import {
@@ -158,6 +160,28 @@ async function enrichWithLivePrice(entries: WatchlistEntry[]): Promise<Watchlist
 const EARNINGS_RECHECK_NO_DATE_MS = 3 * 24 * 3600 * 1000; // recheck "pas de date connue" tous les 3j
 const MAX_EARNINGS_FETCH_PER_GET = 30;                    // garde-fou anti-burst sur grosse watchlist
 
+/**
+ * Date du prochain earnings, avec fallback Yahoo pour les titres non-US.
+ * Finnhub /calendar/earnings est US-only → vide pour NVO, ASML, CSU, RMS… On bascule
+ * sur Yahoo quoteSummary (via le symbole déjà résolu en cache si dispo, sinon résolution).
+ */
+async function fetchNextEarningsDate(ticker: string, yahooSymbolHint?: string | null): Promise<string | null> {
+  // Titre déjà résolu sur Yahoo (EU/ADR) → Yahoo directement (Finnhub serait vide).
+  if (yahooSymbolHint) {
+    const y = await getEarningsInfoYahoo(yahooSymbolHint).catch(() => null);
+    return y?.next?.date ?? null;
+  }
+  // Sinon : Finnhub (US), puis fallback Yahoo si vide (non-US tapé sans suffixe).
+  const fh = await getNextEarningsDate(ticker).catch(() => null);
+  if (fh) return fh;
+  const r = await resolveYahooTicker(ticker).catch(() => null);
+  if (r?.symbol) {
+    const y = await getEarningsInfoYahoo(r.symbol).catch(() => null);
+    return y?.next?.date ?? null;
+  }
+  return null;
+}
+
 /** Vrai si la date earnings cachée est périmée et doit être re-fetchée. */
 function earningsStale(snap: CachedQuantSnapshot, todayIso: string, nowMs: number): boolean {
   if (!snap.earningsCheckedAt) return true;                                    // jamais vérifié
@@ -185,9 +209,9 @@ async function refreshStaleEarnings(
   if (stale.length === 0) return;
 
   await Promise.all(stale.map(async e => {
-    const date = await getNextEarningsDate(e.ticker).catch(() => null);
-    e.nextEarningsDate = date;
     const snap = cacheByTicker.get(e.ticker)!;
+    const date = await fetchNextEarningsDate(e.ticker, snap.yahooSymbol).catch(() => null);
+    e.nextEarningsDate = date;
     snap.nextEarningsDate = date;
     snap.earningsCheckedAt = new Date().toISOString();
     await writeCachedSnapshot(e.ticker, snap).catch(() => {});
