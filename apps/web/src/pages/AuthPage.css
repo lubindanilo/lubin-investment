@@ -6,7 +6,8 @@
   border-radius: var(--r-lg);
   box-shadow: var(--sh-lg);
   min-height: 560px;
-  margin: 8px 0;
+  max-width: 1040px;
+  margin: 8px auto;
 }
 
 .auth-form-side {

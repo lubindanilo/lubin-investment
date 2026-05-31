@@ -216,7 +216,9 @@ input { font-family: inherit; }
 .tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
 
 .app-main {
-  max-width: 1240px;
+  /* Conteneur large : les pages se limitent elles-mêmes via .wrap (1240) ou .wrap-wide
+     (1440). Les listes (Screener/Watchlist) occupent ainsi toute la largeur utile. */
+  max-width: 1440px;
   margin: 0 auto;
   padding: 32px 40px;
 }
