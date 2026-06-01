@@ -31,7 +31,7 @@ const INTL_PRIORITY = 2;
 /** Types Finnhub qu'on garde (on écarte ETF, warrants, droits, fonds, etc.). */
 const KEPT_TYPES = new Set(['Common Stock', 'ADR', 'REIT', '']);
 /** Symbole compatible avec le reste de l'app (TickerSchema). */
-const VALID_SYMBOL = /^[A-Z0-9.\-]{1,12}$/;
+const VALID_SYMBOL = /^[A-Z0-9.\-]{1,15}$/;
 /**
  * Bourses US "réelles" : Nasdaq (XNAS), NYSE (XNYS), NYSE American/AMEX (XASE).
  * On EXCLUT l'OTC/pink-sheets (OOTC) — ~17 600 tickers obscurs souvent sans données,

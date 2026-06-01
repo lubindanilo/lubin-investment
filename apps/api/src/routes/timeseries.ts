@@ -26,7 +26,7 @@ import * as cache from '../lib/timeseriesCache.js';
 
 export const timeseriesRouter: Router = Router();
 
-const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9.\-]{1,12}$/);
+const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9.\-]{1,15}$/);
 const MetricSchema = z.string().refine((v): v is MetricKey => v in METRICS, { message: 'metric inconnu' });
 const FreqSchema = z.enum(['quarterly', 'annual']).default('quarterly');
 const YearsSchema = z.coerce.number().int().min(1).max(50).default(5);
