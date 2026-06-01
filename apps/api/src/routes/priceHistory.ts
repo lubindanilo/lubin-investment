@@ -17,7 +17,7 @@ import { yahooLimiter } from '../lib/limiter.js';
 
 export const priceHistoryRouter: Router = Router();
 
-const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z.\-]{1,8}$/);
+const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9.\-]{1,12}$/);
 const YearsSchema = z.coerce.number().int().min(1).max(50).default(5);
 const IntervalSchema = z.enum(['1d', '1wk', '1mo']).default('1mo');
 

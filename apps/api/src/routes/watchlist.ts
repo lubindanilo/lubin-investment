@@ -40,7 +40,7 @@ import { requireAuth } from '../middleware/auth.js';
 export const watchlistRouter: Router = Router();
 watchlistRouter.use(requireAuth);
 
-const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z.\-]{1,8}$/);
+const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9.\-]{1,12}$/);
 
 /**
  * Compute fresh + write to global cache. Utilisé quand un ticker n'a pas encore

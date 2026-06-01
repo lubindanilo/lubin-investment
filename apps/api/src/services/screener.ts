@@ -17,19 +17,21 @@ import { getStockSymbols } from './finnhub.js';
 import { buildAndCacheQuantSnapshot } from './scoreSnapshot.js';
 import { getSparkSeries } from './priceSeries.js';
 import { EU_LARGE_CAPS } from '../data/euLargeCaps.js';
+import { INTL_LARGE_CAPS } from '../data/intlLargeCaps.js';
 
 /**
- * Couverture progressive : US d'abord (priority 0), puis EU (1).
- * US : liste Finnhub (filtrée bourses primaires). EU : liste curée (Finnhub free ne fournit
- * pas les symboles hors US), scorée via le fallback Yahoo.
+ * Couverture progressive : US d'abord (priority 0), puis EU (1), puis le reste du monde (2).
+ * US : liste Finnhub (filtrée bourses primaires). EU/INTL : listes curées (Finnhub free ne
+ * fournit pas les symboles hors US), scorées via le fallback Yahoo.
  */
 const US_PRIORITY = 0;
 const EU_PRIORITY = 1;
+const INTL_PRIORITY = 2;
 
 /** Types Finnhub qu'on garde (on écarte ETF, warrants, droits, fonds, etc.). */
 const KEPT_TYPES = new Set(['Common Stock', 'ADR', 'REIT', '']);
 /** Symbole compatible avec le reste de l'app (TickerSchema). */
-const VALID_SYMBOL = /^[A-Z.\-]{1,8}$/;
+const VALID_SYMBOL = /^[A-Z0-9.\-]{1,12}$/;
 /**
  * Bourses US "réelles" : Nasdaq (XNAS), NYSE (XNYS), NYSE American/AMEX (XASE).
  * On EXCLUT l'OTC/pink-sheets (OOTC) — ~17 600 tickers obscurs souvent sans données,
@@ -57,11 +59,26 @@ async function insertRows(region: string, rows: SeedRow[]): Promise<number> {
   return inserted;
 }
 
-/** Ingère l'univers d'une région dans la file. US = Finnhub (bourses primaires), EU = liste curée. */
+/** Ingère l'univers d'une région dans la file. US = Finnhub (bourses primaires), EU/INTL = listes curées. */
 export async function seedRegion(region: string): Promise<SeedResult> {
   if (region === 'US') return seedUs();
   if (region === 'EU') return seedEu();
-  throw new Error(`Région inconnue : ${region} (dispo : US, EU)`);
+  if (region === 'INTL') return seedIntl();
+  throw new Error(`Région inconnue : ${region} (dispo : US, EU, INTL)`);
+}
+
+/** INTL : grandes capitalisations curées hors US/EU (Canada, Australie, Nordiques, Asie). */
+async function seedIntl(): Promise<SeedResult> {
+  const seen = new Set<string>();
+  const rows: SeedRow[] = [];
+  for (const raw of INTL_LARGE_CAPS) {
+    const ticker = raw.toUpperCase();
+    if (seen.has(ticker) || !VALID_SYMBOL.test(ticker)) continue;
+    seen.add(ticker);
+    const ex = ticker.includes('.') ? ticker.slice(ticker.lastIndexOf('.') + 1) : null;
+    rows.push({ ticker, exchange: ex, name: null, currency: null, region: 'INTL', priority: INTL_PRIORITY });
+  }
+  return { region: 'INTL', fetched: rows.length, inserted: await insertRows('INTL', rows) };
 }
 
 /** US : liste Finnhub /stock/symbol?exchange=US, filtrée aux bourses primaires (pas d'OTC). */

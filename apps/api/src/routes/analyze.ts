@@ -25,7 +25,7 @@ import { optionalAuth } from '../middleware/auth.js';
 
 export const analyzeRouter: Router = Router();
 
-const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z.\-]{1,8}$/);
+const TickerSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9.\-]{1,12}$/);
 const ValoParamsSchema = z.object({
   targetReturn: z.number().min(0.01).max(1),
   fcfGrowth: z.number().min(-0.5).max(1),
