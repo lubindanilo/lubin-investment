@@ -8,6 +8,16 @@ import { Icon, InfoPop, StatusBadge, toDataStatus } from './ui/primitives.js';
 import { CRITERION_BRIEFS } from '../data/criterionBriefs.js';
 import './CriterionCard.css';
 
+/**
+ * Une valeur est "compacte" (→ grande typo) si c'est un nombre court avec au plus une unité
+ * simple (%, ×). Les valeurs textuelles ('✓ Expansion') ou à unité longue ('-6.12%/an',
+ * '26.6%/an') passent en typo réduite, sans coupure de mot.
+ */
+function isCompactValue(v: string): boolean {
+  const t = v.trim();
+  return t.length <= 7 && /^[-+]?[\d.,]+\s*[%×x]?$/.test(t);
+}
+
 /** Multiple P/FCF parsé depuis la valeur affichée (pour le ReferenceLine de la modale). */
 function extractPfcfMultiple(c: Criterion): number | null {
   const m = c.valeur.match(/^([\d.,]+)\s*×?$/);
@@ -35,7 +45,7 @@ export function CriterionCard({ c, ticker, currency = 'USD', annualOnly = false 
           <StatusBadge status={toDataStatus(c.statut)} />
         </div>
         <div className="crit-card-vrow">
-          <span className="num crit-card-value">{c.valeur}</span>
+          <span className={'num crit-card-value' + (isCompactValue(c.valeur) ? '' : ' is-long')}>{c.valeur}</span>
           <span className="num crit-card-target">cible {c.cible}</span>
         </div>
         <p className="crit-card-note">{c.explication}</p>
