@@ -4,6 +4,7 @@ import type { ScreenerTopRow, ScreenerStats } from '@lubin/shared';
 import { api, ApiError } from '../lib/api.js';
 import { Icon, ScorePill } from '../components/ui/primitives.js';
 import { Sparkline } from '../components/ui/charts.js';
+import { formatPrice } from '../lib/format.js';
 import './ScreenerPage.css';
 
 const SCORE_OPTS = [4, 6, 8, 9, 10];
@@ -132,7 +133,7 @@ export function ScreenerPage() {
                     <td className="muted" style={{ fontSize: 13 }}>{r.sector ?? '—'}</td>
                     <td><ScorePill score={Math.round(ratioOf(r) * 10)} /></td>
                     <td className="num" style={{ fontWeight: 600 }}>{r.pfcfTTM != null && r.pfcfTTM > 0 ? r.pfcfTTM.toFixed(1) + '×' : '—'}</td>
-                    <td className="num">{r.price != null ? r.price.toFixed(2) : '—'}</td>
+                    <td className="num">{formatPrice(r.price, r.currency)}</td>
                     <td className="num" style={{ fontWeight: 600, color: r.dayChangePct == null ? 'var(--ink-4)' : r.dayChangePct >= 0 ? 'var(--good)' : 'var(--bad)' }}>
                       {r.dayChangePct == null ? '—' : `${r.dayChangePct >= 0 ? '+' : ''}${r.dayChangePct.toFixed(2)} %`}
                     </td>

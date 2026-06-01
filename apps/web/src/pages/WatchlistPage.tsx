@@ -4,6 +4,7 @@ import type { WatchlistEntry } from '@lubin/shared';
 import { api, ApiError } from '../lib/api.js';
 import { useToast } from '../components/Toast.js';
 import { Icon, ScorePill } from '../components/ui/primitives.js';
+import { formatPrice } from '../lib/format.js';
 import './WatchlistPage.css';
 
 type SortKey = 'default' | 'price' | 'pfcf' | 'score' | 'earnings';
@@ -170,7 +171,7 @@ export function WatchlistPage() {
                           <span className="tbl-soc-name">{w.name}</span>
                         </div>
                       </td>
-                      <td className="num-cell num" style={{ fontWeight: 600 }}>{w.price != null ? `${w.currency ?? 'USD'} ${w.price.toFixed(2)}` : '—'}</td>
+                      <td className="num-cell num" style={{ fontWeight: 600 }}>{formatPrice(w.price, w.currency)}</td>
                       <td className="num-cell num">{w.pfcfTTM != null && w.pfcfTTM > 0 ? w.pfcfTTM.toFixed(1) + '×' : '—'}</td>
                       <td className="num-cell">{s != null ? <ScorePill score={s} /> : <span className="muted">—</span>}</td>
                       <td><span className="num tiny wl-earn"><Icon name="calendar" size={13} style={{ color: 'var(--ink-4)' }} />{formatEarnings(w.nextEarningsDate)}</span></td>
