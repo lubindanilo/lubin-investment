@@ -175,24 +175,54 @@ async function scoreOne(ticker: string): Promise<ScoreOutcome> {
   }
 }
 
-export interface TickResult { picked: number; scored: number; nodata: number; error: number; elapsedMs: number }
+export interface TickResult { picked: number; scored: number; nodata: number; error: number; timeout: number; elapsedMs: number }
+
+/**
+ * Plafond de temps pour la notation d'UN ticker. Les titres internationaux passent par
+ * Yahoo (résolution + fondamentaux + sparkline = plusieurs appels séquentiels) et Yahoo
+ * peut throttler/bloquer les IP Vercel → un appel peut traîner 10-30s. Sans plafond, un
+ * seul ticker lent fait dépasser la limite HTTP du cron (30s). Au-delà, on abandonne ce
+ * ticker (marqué error → re-tenté plus tard, deprioritisé) et on passe au suivant.
+ */
+const PER_TICKER_MS = 10_000;
+
+const TIMEOUT_SENTINEL = Symbol('timeout');
+
+/** Marque un ticker abandonné (timeout) : incrémente attempts + lastScoredAt (le deprioritise). */
+async function markTimedOut(ticker: string): Promise<void> {
+  console.warn(`[screener score ${ticker}] timeout (> ${PER_TICKER_MS}ms) — abandonné, re-tenté plus tard`);
+  await prisma.screenerTicker.update({
+    where: { ticker },
+    data: { status: 'error', attempts: { increment: 1 }, lastScoredAt: new Date() },
+  }).catch(() => {});
+}
 
 /**
  * Traite un lot de tickers dus. Séquentiel (le finnhubLimiter gère la concurrence interne
- * à chaque ticker) avec un budget de temps pour tenir sous la durée max du lambda.
+ * à chaque ticker) avec un double garde-fou pour tenir SOUS la limite HTTP du cron (30s) :
+ *   - timeout par ticker (PER_TICKER_MS) : aucun titre lent ne bloque le lot,
+ *   - garde de budget : on ne démarre un nouveau ticker que s'il reste ≥ PER_TICKER_MS,
+ *     pour que la réponse parte bien avant la coupure du cron.
  */
-export async function tick(limit: number, softDeadlineMs = 25_000): Promise<TickResult> {
+export async function tick(limit: number, softDeadlineMs = 22_000): Promise<TickResult> {
   const start = Date.now();
   const due = await pickDueTickers(limit);
-  let scored = 0, nodata = 0, error = 0;
+  let scored = 0, nodata = 0, error = 0, timeout = 0;
   for (const t of due) {
-    if (Date.now() - start > softDeadlineMs) break;
-    const r = await scoreOne(t.ticker);
-    if (r === 'scored') scored++; else if (r === 'nodata') nodata++; else error++;
+    // Pas assez de budget pour garantir un cycle complet → on s'arrête net.
+    if (Date.now() - start + PER_TICKER_MS > softDeadlineMs) break;
+    const timer = new Promise<typeof TIMEOUT_SENTINEL>((res) => setTimeout(() => res(TIMEOUT_SENTINEL), PER_TICKER_MS));
+    // scoreOne ne rejette pas (catch interne) ; en cas de timeout il continue en arrière-plan
+    // et finira par écrire sa ligne (la lambda tient 60s) — la donnée converge.
+    const r = await Promise.race([scoreOne(t.ticker), timer]);
+    if (r === TIMEOUT_SENTINEL) { await markTimedOut(t.ticker); timeout++; }
+    else if (r === 'scored') scored++;
+    else if (r === 'nodata') nodata++;
+    else error++;
   }
   const elapsedMs = Date.now() - start;
-  console.log(`[screener tick] picked=${due.length} scored=${scored} nodata=${nodata} error=${error} in ${elapsedMs}ms`);
-  return { picked: due.length, scored, nodata, error, elapsedMs };
+  console.log(`[screener tick] picked=${due.length} scored=${scored} nodata=${nodata} error=${error} timeout=${timeout} in ${elapsedMs}ms`);
+  return { picked: due.length, scored, nodata, error, timeout, elapsedMs };
 }
 
 export interface TopRow {
