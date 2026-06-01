@@ -11,6 +11,15 @@
 
 .valb-range { width: 100%; accent-color: var(--brand); height: 6px; }
 
+.valb-hist-btn {
+  display: inline-flex; align-items: center; gap: 7px; align-self: flex-start;
+  margin-top: 18px;
+  background: none; border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 12px; font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  transition: background .14s, color .14s, border-color .14s;
+}
+.valb-hist-btn:hover { background: var(--brand-soft); color: var(--brand-ink); border-color: transparent; }
+
 .valb-right { padding: 22px; background: var(--surface-2); display: flex; flex-direction: column; justify-content: center; }
 .valb-price { font-size: 40px; font-weight: 700; color: var(--ink); line-height: 1; letter-spacing: -0.02em; }
 .valb-current { margin-top: 10px; }

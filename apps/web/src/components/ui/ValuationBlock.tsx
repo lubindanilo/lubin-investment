@@ -8,6 +8,7 @@
  */
 import { useState } from 'react';
 import { Icon } from './primitives.js';
+import { PfcfChartModal } from '../PfcfChartModal.js';
 import './ValuationBlock.css';
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
@@ -26,16 +27,19 @@ function Slider({ label, value, set, min, max, step, suffix }: {
   );
 }
 
-export function ValuationBlock({ price, pfcfTTM, currency = 'USD', valoParams }: {
+export function ValuationBlock({ price, pfcfTTM, currency = 'USD', valoParams, ticker, annualOnly = false }: {
   price: number | null;
   pfcfTTM: number | null;
   currency?: string;
   valoParams?: { targetReturn: number; fcfGrowth: number; targetMultiple: number };
+  ticker?: string;
+  annualOnly?: boolean;
 }) {
   const fcfPerShare = price != null && pfcfTTM != null && pfcfTTM > 0 ? price / pfcfTTM : null;
   const [growth, setGrowth] = useState(() => clamp(Math.round((valoParams?.fcfGrowth ?? 0.1) * 100), 0, 30));
   const [exitMult, setExitMult] = useState(() => clamp(Math.round(valoParams?.targetMultiple ?? 20), 8, 40));
   const [ret, setRet] = useState(() => clamp(Math.round((valoParams?.targetReturn ?? 0.15) * 100), 6, 20));
+  const [pfcfChartOpen, setPfcfChartOpen] = useState(false);
 
   const sym = currency === 'USD' ? '$' : `${currency} `;
 
@@ -65,6 +69,11 @@ export function ValuationBlock({ price, pfcfTTM, currency = 'USD', valoParams }:
           <Slider label="Multiple de sortie (P/FCF)" value={exitMult} set={setExitMult} min={8} max={40} step={1} suffix="×" />
           <Slider label="Rendement annuel visé" value={ret} set={setRet} min={6} max={20} step={1} suffix=" %" />
         </div>
+        {ticker && pfcfTTM != null && pfcfTTM > 0 && (
+          <button type="button" className="valb-hist-btn" onClick={() => setPfcfChartOpen(true)}>
+            <Icon name="bars" size={14} /> Historique du P/FCF
+          </button>
+        )}
       </div>
       <div className="valb-right">
         <span className="valb-kicker">Prix d'achat conseillé</span>
@@ -78,6 +87,10 @@ export function ValuationBlock({ price, pfcfTTM, currency = 'USD', valoParams }:
         </div>
         <p className="tiny muted valb-note">Jugé <b style={{ color: 'var(--ink-2)' }}>séparément</b> de la note de qualité. Le prix conseillé est le cours d'entrée pour viser votre rendement.</p>
       </div>
+
+      {pfcfChartOpen && ticker && (
+        <PfcfChartModal ticker={ticker} currentPfcf={pfcfTTM} annualOnly={annualOnly} onClose={() => setPfcfChartOpen(false)} />
+      )}
     </div>
   );
 }

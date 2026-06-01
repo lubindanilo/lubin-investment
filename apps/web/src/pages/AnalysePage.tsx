@@ -276,7 +276,7 @@ function AnalysisView({ analysis, chiffres, business, management, watched, onWat
 
         {/* Valorisation */}
         <Section title="Valorisation" sub="Prix d'entrée — jugé séparément de la qualité du business">
-          <ValuationBlock price={analysis.price} pfcfTTM={analysis.metrics.pfcfTTM} currency={currency} valoParams={analysis.valoParams} />
+          <ValuationBlock price={analysis.price} pfcfTTM={analysis.metrics.pfcfTTM} currency={currency} valoParams={analysis.valoParams} ticker={analysis.ticker} annualOnly={annualOnly} />
         </Section>
 
         {/* Actualités */}
